@@ -1,3 +1,3 @@
-data/RecoRD/train.jsonl filter=lfs diff=lfs merge=lfs -text
+data/ReCoRD/train.jsonl filter=lfs diff=lfs merge=lfs -text
 data/ReCoRD filter=lfs diff=lfs merge=lfs -text
 data/ReCoRD/* filter=lfs diff=lfs merge=lfs -text
