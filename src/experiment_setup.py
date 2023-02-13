@@ -16,7 +16,7 @@ def main():
     parser.add_argument('--model_size', choices=['350m'])
     parser.add_argument('--method', choices=['mice_sampling'])
     parser.add_argument('--in_context', default='1', type=int)
-    parser.add_argument('--num_prompts', type=int)
+    parser.add_argument('--max_num_prompts', type=int)
 
     parser.add_argument('--dataset', choices=['BoolQ'])
     parser.add_argument('--train', type=int)
@@ -52,7 +52,6 @@ def main():
 
         exp_dir = os.path.join(exp_home, args.dataset, args.model_size, args.method, 
                 f"train{ref_exp['train']}_test{ref_exp['test']}_id{exp_id}") 
-        os.makedirs(exp_dir, exist_ok=True)
 
         summary = {
             'id': exp_id,
@@ -62,6 +61,7 @@ def main():
             'model_size': args.model_size,
             'method': args.method,
             'in_context': args.in_context,
+            'max_num_prompts': args.max_num_prompts,
             'train': ref_exp['train'],
             'test': ref_exp['test']
         }
@@ -72,27 +72,27 @@ def main():
         info['train_ids'] = ref_exp_info['train_ids']
         info['test_ids'] = ref_exp_info['test_ids']
 
+        os.makedirs(exp_dir, exist_ok=True)
         copyfile(os.path.join(ref_exp_dir, 'train.jsonl'), os.path.join(exp_dir, 'train.jsonl'))
         copyfile(os.path.join(ref_exp_dir, 'test.jsonl'), os.path.join(exp_dir, 'test.jsonl'))
         copyfile(os.path.join(ref_exp_dir, 'test_ids.txt'), os.path.join(exp_dir, 'test_ids.txt'))
 
     else:
         data_dir = os.path.join(data_home, args.dataset)
-        train = read_jsonl(os.path.join(data_dir, 'train.jsonl'))
-        test = read_jsonl(os.path.join(data_dir, 'val.jsonl')) # original datasets only have labels for validation
+        train_data = read_jsonl(os.path.join(data_dir, 'train.jsonl'))
+        test_data = read_jsonl(os.path.join(data_dir, 'val.jsonl')) # original datasets only have labels for validation
 
         # sample k demonstrations for n test examples
-        train = random.choices(train, k=args.train)
+        train_data = random.choices(train_data, k=args.train)
         if args.test > 0: # pass -1 to test all examples
-            test = random.choices(test, k=args.test)
+            test_data = random.choices(test_data, k=args.test)
         else:
-            args.test = len(test)
-        train.sort(key=lambda x: x['idx'])
-        test.sort(key=lambda x: x['idx'])
+            args.test = len(test_data)
+        train_data.sort(key=lambda x: x['idx'])
+        test_data.sort(key=lambda x: x['idx'])
 
         exp_dir = os.path.join(exp_home, args.dataset, args.model_size, args.method, 
                         f"train{args.train}_test{args.test}_id{exp_id}")
-        os.makedirs(exp_dir, exist_ok=True)
 
         summary = {
             'id': exp_id,
@@ -102,17 +102,19 @@ def main():
             'model_size': args.model_size,
             'method': args.method,
             'in_context': args.in_context,
+            'max_num_prompts': args.max_num_prompts,
             'train': args.train,
             'test': args.test
         }
         info = deepcopy(summary)
 
-        info['train_ids'] = [example['idx'] for example in train]
-        info['test_ids'] = [example['idx'] for example in test]
+        info['train_ids'] = [example['idx'] for example in train_data]
+        info['test_ids'] = [example['idx'] for example in test_data]
 
-        write_jsonl(train, os.path.join(exp_dir, 'train.jsonl'))
-        write_jsonl(test, os.path.join(exp_dir, 'test.jsonl'))
-        write_txt([str(example['idx']) for example in test], os.path.join(exp_dir, 'test_ids.txt'))
+        os.makedirs(exp_dir, exist_ok=True)
+        write_jsonl(train_data, os.path.join(exp_dir, 'train.jsonl'))
+        write_jsonl(test_data, os.path.join(exp_dir, 'test.jsonl'))
+        write_txt([str(example['idx']) for example in test_data], os.path.join(exp_dir, 'test_ids.txt'))
 
     exp_summary_data['summary'].append(summary)
     write_json(exp_summary_data, exp_summary)

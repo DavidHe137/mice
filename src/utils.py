@@ -1,7 +1,7 @@
 import json
 
 def read_jsonl(filepath: str) -> dict:    
-    data = list()
+    data = []
     with open(filepath, "r") as f:
         for line in f.readlines():
             example = json.loads(line)
