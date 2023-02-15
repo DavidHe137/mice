@@ -13,7 +13,7 @@ def main():
     Create experiment folder, set up train/test splits, log details
     '''
     parser = argparse.ArgumentParser(description='Configure dataset, model-size, method, data splits.')
-    parser.add_argument('--model_size', choices=['350m'])
+    parser.add_argument('--model', choices=['opt-350m'])
     parser.add_argument('--method', choices=['mice_sampling'])
     parser.add_argument('--in_context', default='1', type=int)
     parser.add_argument('--max_num_prompts', type=int)
@@ -58,7 +58,7 @@ def main():
             'created': str(datetime.now()),
             'location': exp_dir,
             'dataset': ref_exp['dataset'],
-            'model_size': args.model_size,
+            'model': args.model,
             'method': args.method,
             'in_context': args.in_context,
             'max_num_prompts': args.max_num_prompts,
@@ -99,7 +99,7 @@ def main():
             'created': str(datetime.now()),
             'location': exp_dir,
             'dataset': args.dataset,
-            'model_size': args.model_size,
+            'model': args.model,
             'method': args.method,
             'in_context': args.in_context,
             'max_num_prompts': args.max_num_prompts,
