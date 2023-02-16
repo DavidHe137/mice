@@ -91,7 +91,7 @@ def main():
         train_data.sort(key=lambda x: x['idx'])
         test_data.sort(key=lambda x: x['idx'])
 
-        exp_dir = os.path.join(exp_home, args.dataset, args.model_size, args.method, 
+        exp_dir = os.path.join(exp_home, args.dataset, args.model, args.method, 
                         f"train{args.train}_test{args.test}_id{exp_id}")
 
         summary = {

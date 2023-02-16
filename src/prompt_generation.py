@@ -16,7 +16,7 @@ def similarity_scores(train_data, test_data, dataset, encoder_model):
     device = torch.device("cuda")
     model.to(device)
 
-    similarity_map = defaultdict({})
+    similarity_map = defaultdict(dict)
 
     test_embeddings = {}
     for test_example in test_data:
@@ -26,16 +26,16 @@ def similarity_scores(train_data, test_data, dataset, encoder_model):
     train_embeddings = {}
     for train_example in train_data:
         train_prompt = format_example(train_example, dataset, includeLabel=True)
-        train_embeddings[train_example['idx']] = torch.tensor(model.encode(test_prompt))
-    
+        train_embeddings[train_example['idx']] = torch.tensor(model.encode(train_prompt))
+
     similarity = nn.CosineSimilarity(dim=1) #TODO: possible hyperparameter
-    similarity_map = {test_example['idx']: 
-                        [(train_example['idx'], similarity(
+    similarity_map = {test_example['idx']:
+                        sorted([(train_example['idx'], similarity(
                                                     test_embeddings[test_example['idx']].unsqueeze(0),
-                                                    train_embeddings[train_example['idx']].unsqueeze(0),).item()) 
-                                                    for train_example in train_data].sort(key=lambda x: x[1], reverse=True) 
+                                                    train_embeddings[train_example['idx']].unsqueeze(0),).item())
+                                                    for train_example in train_data], key=lambda x: x[1], reverse=True)
                         for test_example in test_data}
-    
+
     return similarity_map
 
 def similar_generator(similarity_map: dict, in_context: int, max_num_prompts: int) -> dict(list()):
@@ -53,7 +53,7 @@ def similar_generator(similarity_map: dict, in_context: int, max_num_prompts: in
         else:
             top_t = list(map(lambda x: x[0], similarity_map[test_idx][:t]))
             prompt_map[test_idx] = [(ex1, ex2) for ex1 in top_t for ex2 in top_t]
-        
+
     return prompt_map
 
 def random_generator(train_data, test_data, in_context: int, max_num_prompts: int) -> dict(list()):
@@ -81,7 +81,7 @@ def main():
     args = parser.parse_args()
 
     exp_info = get_experiment_info(args.experiment_id)
-    
+
     train_data = read_jsonl(os.path.join(exp_info['location'], 'train.jsonl'))
     test_data = read_jsonl(os.path.join(exp_info['location'], 'test.jsonl'))
 
@@ -97,6 +97,6 @@ def main():
     if similarity_map:
         write_json(similarity_map, os.path.join(exp_info['location'], 'similarity_scores.json'))
     write_json(prompt_map, os.path.join(exp_info['location'], 'prompt_map.json'))
-              
+
 if __name__ == '__main__':
     main()

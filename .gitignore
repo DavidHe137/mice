@@ -1,3 +1,5 @@
 .DS_Store
 experiments/*
 src/__pycache__
+.vscode
+run.log
