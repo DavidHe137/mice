@@ -75,7 +75,7 @@ def bayesian_noise_reduction(in_context: int, max_num_prompts: int) -> dict(list
 def main():
     parser = argparse.ArgumentParser(description='Generate json dictionary consisting of test_idx: train_indices)')
     parser.add_argument('experiment_id', type=str)
-    parser.add_argument('--method', choices=['similar', 'random', 'bayesian_noise'])
+    parser.add_argument('--generation', choices=['similar', 'random', 'bayesian_noise'])
     parser.add_argument('--in_context', default=2, type=int)
     parser.add_argument('--max_num_prompts', default=1, type=int) #FIXME: default value
     parser.add_argument('--encoder', default='all-roberta-large-v1', type=str)
@@ -84,7 +84,7 @@ def main():
     args = parser.parse_args()
 
     exp_info = get_experiment_info(args.experiment_id)
-    generation_dir = os.path.join(exp_info['location'], 'generations', f"{args.method}_{args.in_context}_{args.max_num_prompts}_{args.encoder}")
+    generation_dir = os.path.join(exp_info['location'], 'generations', f"{args.generation}_{args.in_context}_{args.max_num_prompts}_{args.encoder}")
     if os.path.exists(generation_dir):
         print(f"{generation_dir} already exists.")
         return
@@ -95,10 +95,10 @@ def main():
     similarity_map = {}
     prompt_map = {}
 
-    if args.method == 'similar':
+    if args.generation == 'similar':
         similarity_map = similarity_scores(train_data, test_data, exp_info['dataset'], args.encoder)
         prompt_map = similar_generator(similarity_map, args.in_context, args.max_num_prompts)
-    elif args.method == 'random':
+    elif args.generation == 'random':
         prompt_map = random_generator(train_data, test_data, args.in_context, args.max_num_prompts)
     
     os.makedirs(generation_dir, exist_ok=True)
@@ -117,7 +117,7 @@ def main():
     info_data = read_json(info)
     info_data['generations'][len(info_data['generations']) + 1] = {'created': str(datetime.now()),
                                                                    'location': generation_dir,
-                                                                   'method': args.method,
+                                                                   'method': args.generation,
                                                                    'in_context': args.in_context,
                                                                    'max_num_prompts': args.max_num_prompts,
                                                                    'encoder': args.encoder}

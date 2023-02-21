@@ -56,7 +56,7 @@ def main():
         'dataset': args.dataset,
         'train': args.train,
         'test': args.test,
-        'runs': []
+        'runs': {}
     }
 
     info = deepcopy(summary)

@@ -85,7 +85,7 @@ def predict_with_gptj(
             predictions[str((train_id1, train_id2))] = {
                 "input_text": input["input_text"],
                 "output_text": "",
-                "predictions": "",
+                "prediction": "",
                 "label": test_example["label"]
             }
         cur_num_predictions += 1
