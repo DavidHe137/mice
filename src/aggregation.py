@@ -114,7 +114,7 @@ def main():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('experiment_id', type=str)
     parser.add_argument('generation_id', type=str)
-    parser.add_argument('model_size', type=str)
+    parser.add_argument('model', type=str)
     parser.add_argument('--method', default="mice-sampling", choices=['mice-samping', 'majority-vote'], type=str)
 
     args = parser.parse_args()
@@ -122,7 +122,7 @@ def main():
     exp_info = get_experiment_info(args.experiment_id)
     generation_dir = exp_info['generations'][args.generation_id]['location']
 
-    examples_dir = os.path.join(generation_dir, args.model_size)
+    examples_dir = os.path.join(generation_dir, args.model)
     similarity_map = read_json(os.path.join(generation_dir, "similarity_scores.json"))
     prompt_map = read_json(os.path.join(generation_dir, "prompt_map.json"))
 
@@ -185,7 +185,7 @@ def main():
         )
 
     # output the predictions
-    predictions_filepath = os.path.join(generation_dir, args.model_size, "sampling_predictions.json")
+    predictions_filepath = os.path.join(generation_dir, args.model, "sampling_predictions.json")
     write_json(predictions, predictions_filepath)
 
     super_glue_metric = load('super_glue', exp_info['dataset'].lower()) 
@@ -197,7 +197,7 @@ def main():
     run = {
         'evaluated': str(datetime.now()),
         'generation': exp_info['generations'][args.generation_id],
-        'model_size': args.model_size,
+        'model': args.model,
         'method': args.method,
         'result': result
     }
