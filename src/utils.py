@@ -45,25 +45,22 @@ def write_json(d: dict, filepath: str) -> None:
     with open(filepath, "w") as f:
         json.dump(d, f, indent=4)
 
-def get_experiment_info(experiment_id: int) -> dict():
+def get_experiment_info(experiment_id: str) -> dict():
     project_root = Path(__file__).resolve().parents[1]
     exp_home = os.path.join(project_root, 'experiments')
 
     exp_summary = os.path.join(exp_home, 'summary.json')
 
     exp_info = {}
-    # check to see experiment id exists
     if os.path.exists(exp_summary):
-        exp_summary_data = read_json(exp_summary)['summary']
+        exp_summary_data = read_json(exp_summary)
+        assert experiment_id in exp_summary_data
 
-        exp_info = {}
-        for exp in exp_summary_data:
-            if exp['id'] == experiment_id:
-                exp_info = read_json(os.path.join(exp['location'], 'info.json'))
-
+        exp_info = read_json(os.path.join(exp_summary_data[experiment_id]['location'], 'info.json'))
         assert exp_info
 
     return exp_info
+
 def format_example(example : dict, dataset: str, includeLabel=False) -> str:
     assert dataset in ['BoolQ']
 
@@ -77,3 +74,12 @@ def format_example(example : dict, dataset: str, includeLabel=False) -> str:
         text += f"{example['label']}\n"
 
     return text
+
+def extract_prediction(output: str, dataset: str):
+    assert dataset in ['BoolQ']
+
+    templates = {
+        'BoolQ' : lambda ex: ex.split("\n")[0]
+    }
+
+    return templates[dataset](output)
