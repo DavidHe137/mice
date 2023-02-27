@@ -1,7 +1,6 @@
 import os
 import json
 import argparse
-import numpy as np
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
@@ -60,9 +59,8 @@ def predict_with_gptj(
                 eos_token_id=198,  # special character 'ċ' (bytecode for new line?) NOTE use this for generation
             )
             # generated tokens
-            print(outputs)
             generated_tokens = outputs.sequences[:, input_len:-1]
-            print("generated_tokens=", generated_tokens)
+            # print("generated_tokens=", generated_tokens)
 
             # generated text
             generated_text = tokenizer.decode(generated_tokens[0])
@@ -128,7 +126,7 @@ def main():
     model_name = models[args.model]
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
-    max_generated_len = 256
+    max_generated_len = 1 #NOTE: for SuperGLUE
     max_context_len = 2048
     print("done!")
 

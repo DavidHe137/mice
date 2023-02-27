@@ -84,11 +84,11 @@ def compute_and_save_priors(
 
     return priors
 
-def sampling(mention_probs_verbose, prompt_probs, predictions, gold_label):
+def sampling(sampled_probs, prompt_probs, gold_label):
     # Compute P(y|Z) from all the Indicator(m \in Z_i) and P(Z_i), for all i
     # NOTE: This is the crux computation-- all others are flowery
     all_probs = defaultdict(float)
-    for mention_d in mention_probs_verbose:
+    for mention_d in sampled_probs:
         all_probs[mention_d["span"]] = sum(
             [prompt_probs[prompt] for prompt in mention_d["prompts"]]
         )
@@ -115,7 +115,7 @@ def main():
     parser.add_argument('experiment_id', type=str)
     parser.add_argument('generation_id', type=str)
     parser.add_argument('model', type=str)
-    parser.add_argument('--method', default="mice-sampling", choices=['mice-samping', 'majority-vote'], type=str)
+    parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'majority-vote'], type=str)
 
     args = parser.parse_args()
 
@@ -155,6 +155,12 @@ def main():
             }
             continue
 
+        # outputs the counts and predictions
+        write_json(  # \mathbb{1}(m \ in Y_{x,z})
+            sampled_probs,
+            os.path.join(example_dir, f"{args.method}_sampled_probs.json")
+        )
+
         # compute P(Z_i|X) and save it
         prompt_probs = compute_and_save_priors(
             example_dir,
@@ -165,7 +171,7 @@ def main():
 
         # produce raw mention info
         combined_probs = sampling(
-            sampled_probs, prompt_probs, example_predictions, gold_label
+            sampled_probs, prompt_probs, gold_label
         )
 
         predictions[example_id] = {
@@ -174,24 +180,19 @@ def main():
             "label": gold_label,
         }
 
-        # outputs the counts and predictions
-        write_json(  # \mathbb{1}(m \ in Y_{x,z})
-            sampled_probs,
-            os.path.join(example_dir, "sampling_raw_mention_probs_verbose.json")
-        )
         write_json(  # P(y_i|z,x)
             combined_probs,
-            os.path.join(example_dir, "sampling_raw_mention_probs.json")
+            os.path.join(example_dir, f"{args.method}_combined_probs.json")
         )
 
     # output the predictions
-    predictions_filepath = os.path.join(generation_dir, args.model, "sampling_predictions.json")
+    predictions_filepath = os.path.join(generation_dir, args.model, f"{args.method}_predictions.json")
     write_json(predictions, predictions_filepath)
 
     super_glue_metric = load('super_glue', exp_info['dataset'].lower()) 
 
-    #FIXME: does not account for surface forms right now
-    result = super_glue_metric.compute(predictions=[p['prediction'].lower() == "true" for p in predictions.values()], references=[p['label'] for p in predictions.values()])
+    result = super_glue_metric.compute(predictions=[verbalize(p['prediction']) for p in predictions.values()], 
+                                       references=[p['label'] for p in predictions.values()])
 
     run_id = len(exp_info['runs']) + 1
     run = {

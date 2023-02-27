@@ -83,3 +83,13 @@ def extract_prediction(output: str, dataset: str):
     }
 
     return templates[dataset](output)
+
+def verbalize(pred: str, dataset: str):
+    superGLUE = ['BoolQ', 'CB', 'COPA', 'MultiRC', 'ReCoRD', 'RTE', 'WiC', 'WSC']
+    assert dataset in superGLUE
+    
+    templates = {
+        'BoolQ' : lambda pred: pred.lower() in ["yes", "true"]
+    }
+
+    return templates[dataset](pred)
