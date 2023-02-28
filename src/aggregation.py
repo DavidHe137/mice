@@ -116,6 +116,7 @@ def main():
     parser.add_argument('generation_id', type=str)
     parser.add_argument('model', type=str)
     parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'majority-vote'], type=str)
+    parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
 
@@ -195,6 +196,9 @@ def main():
                                        references=[p['label'] for p in predictions.values()])
 
     run_id = len(exp_info['runs']) + 1
+    if args.uuid:
+        run_id = args.uuid
+
     run = {
         'evaluated': str(datetime.now()),
         'generation': exp_info['generations'][args.generation_id],
@@ -211,6 +215,14 @@ def main():
 
     exp_info['runs'][run_id] = run
     write_json(exp_info, os.path.join(exp_summary_data[args.experiment_id]['location'], 'info.json'))
+
+    if args.uuid:
+        project_root = Path(__file__).resolve().parents[1]
+        log_file = os.path.join(project_root, 'logs', f"{args.uuid}.json")
+        log = read_json(log_file)
+        log['status'] = "finished"
+        write_json(log, os.path.join(project_root, "logs", f"{args.uuid}.json"))
+
 
 if __name__ == "__main__":
     main()

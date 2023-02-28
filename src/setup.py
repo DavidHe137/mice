@@ -16,6 +16,7 @@ def main():
     parser.add_argument('--dataset', choices=['BoolQ'])
     parser.add_argument('--train', type=int)
     parser.add_argument('--test', type=int)
+    parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
 
@@ -31,7 +32,7 @@ def main():
     exp_summary_data = {}
     if os.path.exists(exp_summary):        
         exp_summary_data = read_json(exp_summary)
-        exp_id = max(exp_summary_data.keys()) + 1        
+        exp_id = max([int(_) for _ in exp_summary_data.keys()]) + 1        
 
     data_dir = os.path.join(data_home, args.dataset)
     train_data = read_jsonl(os.path.join(data_dir, 'train.jsonl'))
@@ -72,6 +73,9 @@ def main():
     exp_summary_data[exp_id] = summary
     write_json(exp_summary_data, exp_summary)
     write_json(info, os.path.join(exp_dir, 'info.json'))
+
+    if args.uuid:
+        write_json({"uuid": args.uuid, "experiment_id": exp_id, "status": "prompt generation"},os.path.join(project_root, "logs", f"{args.uuid}.json"))
         
 if __name__ == '__main__':
     main()

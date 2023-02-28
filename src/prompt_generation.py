@@ -79,6 +79,7 @@ def main():
     parser.add_argument('--in_context', default=2, type=int)
     parser.add_argument('--max_num_prompts', default=1, type=int) #FIXME: default value
     parser.add_argument('--encoder', default='all-roberta-large-v1', type=str)
+    parser.add_argument('--uuid', type=str)
 
     #TODO: token limits, generation length
     args = parser.parse_args()
@@ -115,14 +116,25 @@ def main():
     print("Logging info...", end="")
     info = os.path.join(exp_info['location'], 'info.json')
     info_data = read_json(info)
-    info_data['generations'][len(info_data['generations']) + 1] = {'created': str(datetime.now()),
-                                                                   'location': generation_dir,
-                                                                   'method': args.generation,
-                                                                   'in_context': args.in_context,
-                                                                   'max_num_prompts': args.max_num_prompts,
-                                                                   'encoder': args.encoder}
+    generation_id = len(info_data['generations']) + 1
+    info_data['generations'][generation_id] = {'created': str(datetime.now()),
+                                                'location': generation_dir,
+                                                'method': args.generation,
+                                                'in_context': args.in_context,
+                                                'max_num_prompts': args.max_num_prompts,
+                                                'encoder': args.encoder}
     write_json(info_data, info)
     print("done!")
+
+    if args.uuid:
+        project_root = Path(__file__).resolve().parents[1]
+        log_file = os.path.join(project_root, 'logs', f"{args.uuid}.json")
+        log = read_json(log_file)
+        log['generation_id'] = generation_id
+        log['status'] = "inference"
+        write_json(log, os.path.join(project_root, "logs", f"{args.uuid}.json"))
+
+
 
 if __name__ == '__main__':
     main()

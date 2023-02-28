@@ -3,3 +3,5 @@ experiments/*
 src/__pycache__
 .vscode
 run.log
+logs
+notebooks
