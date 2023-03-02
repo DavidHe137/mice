@@ -1,29 +1,19 @@
-'''
-#if new false, search(return error if not found), otherwise create new
-new=false
-dataset=BoolQ
-train=8
-test=64
-#experiment id
+#!/usr/bin/env python3
+#SBATCH --job-name mice-pipeline
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/%A.err
+#SBATCH --gres=gpu:1
+#SBATCH --partition=overcap
+#SBATCH --account=overcap
+#SBATCH --time 5
+#SBATCH --requeue
 
-#search to see if geneeration exists with exact same parameters
-generation=similar
-in_context=2
-max_num_prompts=16
-#generation_id
-
-#check to see if folder exists
-model_size=125m
-
-#check to see if file exists
-method=mice_sampling
-'''
+import sys
+import os
+sys.path.append(os.getcwd()) 
 
 import subprocess
 import argparse
-import readline
-import sys
-import os
 import re
 from pathlib import Path
 from uuid import uuid4
@@ -59,7 +49,6 @@ def parse():
         else:
             run_clean(args)
         return
-    
     
     # First, keep ArgParser from exiting on invalid input
     class InvalidArgs(Exception):
@@ -194,7 +183,7 @@ def run_old(args):
         print("All jobs queued.") 
 
 def run_clean(args):
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = "/coc/pskynet6/dhe83/mice" #FIXME: hardcoded
     scripts = os.path.join(project_root, 'scripts')
     src = os.path.join(project_root, 'src')
 
@@ -204,7 +193,7 @@ def run_clean(args):
     print("Calling setup.py...")
 
     #Setup
-    setup_cmd = f'''srun python {src}/setup.py --dataset {args.dataset} --train {args.train} --test {args.test} --uuid {uuid}'''
+    setup_cmd = f'''python {src}/setup.py --dataset {args.dataset} --train {args.train} --test {args.test} --uuid {uuid}'''
     print(setup_cmd)
     setup = subprocess.run(setup_cmd.split(" "), 
                             stdout=subprocess.PIPE, text=True, check=True)
@@ -213,7 +202,7 @@ def run_clean(args):
 
     #Prompt Generation
     print("Calling prompt_generation.py...")
-    prompt_generation_cmd = f'''srun --gpus-per-node=1 -J \"mice\" -A overcap -p overcap python {src}/prompt_generation.py 0 --generation {args.generation} --in_context {args.in_context} --max_num_prompts {args.max_num_prompts} --uuid {uuid}'''
+    prompt_generation_cmd = f'''python {src}/prompt_generation.py 0 --generation {args.generation} --in_context {args.in_context} --max_num_prompts {args.max_num_prompts} --uuid {uuid}'''
     print(prompt_generation_cmd)
     prompt_generation = subprocess.run(prompt_generation_cmd.split(" "), 
                             stdout=subprocess.PIPE, text=True, check=True)

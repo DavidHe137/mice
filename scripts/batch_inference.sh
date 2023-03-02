@@ -1,7 +1,7 @@
 #!/bin/bash -l
 #SBATCH --job-name mice-inference
-#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/experiments/outputs/%a.out
-#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/experiments/outputs/%a.err
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/%A_inference_%a.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/%A_inference_a.err
 #SBATCH --gres=gpu:1
 #SBATCH --partition=overcap
 #SBATCH --account=overcap

@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/experiments/outputs/%A.out
-#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/experiments/outputs/%A.err
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/%A.err
 set -e
 source ./config.sh
 
