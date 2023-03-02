@@ -84,7 +84,9 @@ def main():
     #TODO: token limits, generation length
     args = parser.parse_args()
 
-    exp_info = get_experiment_info(args.experiment_id)
+    experiment_id = str(get_log_with_uuid(args.uuid)['experiment_id']) if args.uuid else args.experiment_id
+
+    exp_info = get_experiment_info(experiment_id)
     generation_dir = os.path.join(exp_info['location'], 'generations', f"{args.generation}_{args.in_context}_{args.max_num_prompts}_{args.encoder}")
     if os.path.exists(generation_dir):
         print(f"{generation_dir} already exists.")

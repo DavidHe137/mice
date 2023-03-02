@@ -93,3 +93,8 @@ def verbalize(pred: str, dataset: str):
     }
 
     return templates[dataset](pred)
+
+def get_log_with_uuid(uuid: str) -> dict():
+    project_root = Path(__file__).resolve().parents[1]
+    log_file = os.path.join(project_root, 'logs', f"{uuid}.json")
+    return read_json(log_file)

@@ -120,8 +120,15 @@ def main():
 
     args = parser.parse_args()
 
-    exp_info = get_experiment_info(args.experiment_id)
-    generation_dir = exp_info['generations'][args.generation_id]['location']
+    experiment_id = args.experiment_id
+    generation_id = args.generation_id
+    if args.uuid:
+        log = get_log_with_uuid(args.uuid)
+        experiment_id = str(log['experiment_id'])
+        generation_id = str(log['generation_id'])
+
+    exp_info = get_experiment_info(experiment_id)
+    generation_dir = exp_info['generations'][generation_id]['location']
 
     examples_dir = os.path.join(generation_dir, args.model)
     similarity_map = read_json(os.path.join(generation_dir, "similarity_scores.json"))
@@ -192,7 +199,7 @@ def main():
 
     super_glue_metric = load('super_glue', exp_info['dataset'].lower()) 
 
-    result = super_glue_metric.compute(predictions=[verbalize(p['prediction']) for p in predictions.values()], 
+    result = super_glue_metric.compute(predictions=[verbalize(p['prediction'], exp_info['dataset']) for p in predictions.values()], 
                                        references=[p['label'] for p in predictions.values()])
 
     run_id = len(exp_info['runs']) + 1
@@ -201,7 +208,7 @@ def main():
 
     run = {
         'evaluated': str(datetime.now()),
-        'generation': exp_info['generations'][args.generation_id],
+        'generation': exp_info['generations'][generation_id],
         'model': args.model,
         'method': args.method,
         'result': result
@@ -210,11 +217,11 @@ def main():
     project_root = Path(__file__).resolve().parents[1]
     exp_summary = os.path.join(project_root,'experiments', 'summary.json')
     exp_summary_data = read_json(exp_summary)
-    exp_summary_data[args.experiment_id]['runs'][run_id] = run
+    exp_summary_data[experiment_id]['runs'][run_id] = run
     write_json(exp_summary_data, exp_summary)
 
     exp_info['runs'][run_id] = run
-    write_json(exp_info, os.path.join(exp_summary_data[args.experiment_id]['location'], 'info.json'))
+    write_json(exp_info, os.path.join(exp_summary_data[experiment_id]['location'], 'info.json'))
 
     if args.uuid:
         project_root = Path(__file__).resolve().parents[1]

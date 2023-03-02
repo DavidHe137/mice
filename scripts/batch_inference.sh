@@ -8,15 +8,16 @@
 #SBATCH --time 5
 #SBATCH --requeue
 #NOTE: specify --array when invoking sbatch
-source ./config.sh
 
 experiment_id=$1
 generation_id=$2
 model=$3
 test_ids_path=$4
+uuid=${5:-""}
 
 sid=$SLURM_ARRAY_TASK_ID
 test_id=$(sed "${sid}q;d" $test_ids_path)
 
-python $SRC_HOME/inference.py \
-$experiment_id $generation_id $test_id --model $model
+#FIXME: hardcoded path
+python /coc/pskynet6/dhe83/mice/src/inference.py \
+$experiment_id $generation_id $test_id --model $model --uuid $uuid

@@ -104,10 +104,18 @@ def main():
     parser.add_argument('generation_id', type=str)
     parser.add_argument('test_id', type=str)
     parser.add_argument('--model', default="125m", type=str)
+    parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
 
-    exp_info = get_experiment_info(args.experiment_id)
+    experiment_id = args.experiment_id
+    generation_id = args.generation_id
+    if args.uuid:
+        log = get_log_with_uuid(args.uuid)
+        experiment_id = str(log['experiment_id'])
+        generation_id = str(log['generation_id'])
+
+    exp_info = get_experiment_info(experiment_id)
 
     train_data = read_jsonl(os.path.join(exp_info['location'], 'train.jsonl'))
     test_data = read_jsonl(os.path.join(exp_info['location'], 'test.jsonl'))
@@ -126,11 +134,11 @@ def main():
     model_name = models[args.model]
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
-    max_generated_len = 1 #NOTE: for SuperGLUE
+    max_generated_len = 16 #NOTE: for SuperGLUE
     max_context_len = 2048
     print("done!")
 
-    generation_dir = exp_info['generations'][args.generation_id]['location']
+    generation_dir = exp_info['generations'][generation_id]['location']
     example_dir = os.path.join(generation_dir, args.model, args.test_id)
     os.makedirs(example_dir, exist_ok=True)
 
