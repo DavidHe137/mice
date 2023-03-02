@@ -12,11 +12,11 @@ from datetime import datetime
 
 from evaluate import load
 
-def produce_mention_probs(predictions: dict, gold_label: str) -> dict:
+def produce_mention_probs(predictions: dict, gold_label: str, dataset: str) -> dict:
     # first produce all indicators
     all_counts = defaultdict(list)
     for prompt_id, v in predictions.items():
-        all_counts[v['prediction']].append(prompt_id)
+        all_counts[verbalize(v['prediction'], dataset)].append(prompt_id)
 
     # convert to list and sorted
     all_counts_lst = [(k, v) for k, v in all_counts.items()]
@@ -127,8 +127,9 @@ def main():
         experiment_id = str(log['experiment_id'])
         generation_id = str(log['generation_id'])
 
+
     exp_info = get_experiment_info(experiment_id)
-    generation_dir = exp_info['generations'][generation_id]['location']
+    generation_dir = exp_info['generations'][generation_id]['location']        
 
     examples_dir = os.path.join(generation_dir, args.model)
     similarity_map = read_json(os.path.join(generation_dir, "similarity_scores.json"))
@@ -153,7 +154,7 @@ def main():
 
         # produce raw mention probs (\mathbb{1}(m \in Y_{z,x}))
         gold_label = test_data[example_id]['label']
-        sampled_probs = produce_mention_probs(example_predictions, gold_label)
+        sampled_probs = produce_mention_probs(example_predictions, gold_label, exp_info['dataset'])
 
         if args.method == "majority-vote": 
             predictions[example_id] = {
@@ -199,7 +200,17 @@ def main():
 
     super_glue_metric = load('super_glue', exp_info['dataset'].lower()) 
 
-    result = super_glue_metric.compute(predictions=[verbalize(p['prediction'], exp_info['dataset']) for p in predictions.values()], 
+    print(args.method)
+    print("predictions", [p['prediction'] for p in predictions.values()])
+
+    if exp_info['dataset'] == 'RTE':
+        for k in predictions.keys():
+            predictions[k]['label'] = verbalize(predictions[k]['label'], exp_info['dataset'])
+            
+    print("references", [p['label'] for p in predictions.values()])
+
+
+    result = super_glue_metric.compute(predictions=[p['prediction'] for p in predictions.values()], 
                                        references=[p['label'] for p in predictions.values()])
 
     run_id = len(exp_info['runs']) + 1
@@ -229,6 +240,7 @@ def main():
         log = read_json(log_file)
         log['status'] = "finished"
         write_json(log, os.path.join(project_root, "logs", f"{args.uuid}.json"))
+    
 
 
 if __name__ == "__main__":

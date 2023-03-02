@@ -62,34 +62,61 @@ def get_experiment_info(experiment_id: str) -> dict():
     return exp_info
 
 def format_example(example : dict, dataset: str, includeLabel=False) -> str:
-    assert dataset in ['BoolQ']
+    superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']
+    assert dataset in superGLUE
 
     templates = {
-        'BoolQ' : lambda ex: f"Passage: {ex['passage']}\nQuestion: {ex['question']}\nAnswer:"
+        'BoolQ' : lambda ex: f"Passage: {ex['passage']}\nQuestion: {ex['question']}\nAnswer:",
+        'COPA' : lambda ex: f"Premise: {ex['premise']}\nQuestion: What's the {ex['question']} of this?\nAlternative 1: {ex['choice1']}\nAlternative 2: {ex['choice2']}\nCorrect Alternative:",
+        'WSC' : lambda ex: f"Text: {ex['text']}\nQuestion: Does {ex['target']['span2_text']} refer to {ex['target']['span1_text']}?\nAnswer:", 
+        'WiC' : lambda ex: f"Context 1: {ex['sentence1']}\nContext 2: {ex['sentence2']}\nWord: {ex['word']}\nSense Match:", 
+        'RTE' : lambda ex: f"Text: {ex['premise']}\nHypothesis: {ex['hypothesis']}\nEntailment:"
     }
 
     text = templates[dataset](example)
 
     if includeLabel:
-        text += f"{example['label']}\n"
+        if dataset == 'COPA':
+            text += f"{example['label'] + 1}\n" #NOTE: COPA labeling is weird
+        else:
+            text += f"{example['label']}\n"
 
     return text
 
 def extract_prediction(output: str, dataset: str):
-    assert dataset in ['BoolQ']
+    superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']
+    assert dataset in superGLUE
 
     templates = {
-        'BoolQ' : lambda ex: ex.split("\n")[0]
+        'BoolQ' : lambda ex: ex.split("\n")[0],
+        'COPA' : lambda ex: ex.split("\n")[0],
+        'WSC' : lambda ex: ex.split("\n")[0],
+        'WiC' : lambda ex: ex.split("\n")[0],
+        'RTE' : lambda ex: ex.split("\n")[0],
     }
 
     return templates[dataset](output)
 
 def verbalize(pred: str, dataset: str):
-    superGLUE = ['BoolQ', 'CB', 'COPA', 'MultiRC', 'ReCoRD', 'RTE', 'WiC', 'WSC']
+    superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']
     assert dataset in superGLUE
     
+    def isInt(pred: str) -> bool:
+        if pred is None: 
+            return False
+        try:
+            int(pred)
+            return True
+        except ValueError:
+            return False
+
+    
     templates = {
-        'BoolQ' : lambda pred: pred.lower() in ["yes", "true"]
+        'BoolQ' : lambda pred: pred.lower() in ["yes", "true"],
+        'COPA' : lambda pred: int(pred) - 1 if isInt(pred) else "",
+        'WSC' : lambda pred: pred.lower() in ["yes", "true"],
+        'WiC' : lambda pred: pred.lower() in ["yes", "true"],
+        'RTE' : lambda pred: pred.lower() in ["entailment"],
     }
 
     return templates[dataset](pred)

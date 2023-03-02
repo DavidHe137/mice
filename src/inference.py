@@ -128,7 +128,9 @@ def main():
 
     models = {"125m": "facebook/opt-125m",
               "350m": "facebook/opt-350m",
-              "1.3b": "facebook/opt-1.3B"}
+              "1.3b": "facebook/opt-1.3B",
+              "2.7b": "facebook/opt-2.7B",
+              "6.7b": "facebook/opt-6.7B"}
 
     print("Load model...", end="")
     model_name = models[args.model]

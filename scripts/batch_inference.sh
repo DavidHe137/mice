@@ -1,12 +1,13 @@
 #!/bin/bash -l
 #SBATCH --job-name mice-inference
-#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/%A_inference_%a.out
-#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/%A_inference_a.err
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/%a.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/%a.err
 #SBATCH --gres=gpu:1
 #SBATCH --partition=overcap
 #SBATCH --account=overcap
-#SBATCH --time 5
+#SBATCH --time 10
 #SBATCH --requeue
+#NOTE: time should depend on model size
 #NOTE: specify --array when invoking sbatch
 
 experiment_id=$1

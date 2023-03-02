@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 #SBATCH --job-name mice-pipeline
-#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/%A.out
-#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/%A.err
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/slurm/%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/slurm/%A.err
 #SBATCH --gres=gpu:1
 #SBATCH --partition=overcap
 #SBATCH --account=overcap
-#SBATCH --time 5
+#NOTE: should this be 10?
+#SBATCH --time 10
 #SBATCH --requeue
 
 import sys
@@ -25,7 +26,7 @@ def parse():
 
     #setup.py
     parser.add_argument("--experiment_id", type=str)
-    parser.add_argument('--dataset', choices=['BoolQ'])
+    parser.add_argument('--dataset', choices=['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC'])
     parser.add_argument('--train', type=int)
     parser.add_argument('--test', type=int)
 
@@ -97,7 +98,7 @@ def slurm_job_id(job: subprocess.CompletedProcess[str]) -> str:
     return job.stdout.strip().split(" ")[-1]
 
 def run_old(args):    
-    project_root = Path(__file__).resolve().parents[1]
+    project_root = "/coc/pskynet6/dhe83/mice" #FIXME: hardcoded    
     scripts = os.path.join(project_root, 'scripts')
     src = os.path.join(project_root, 'src')
 
@@ -114,7 +115,6 @@ def run_old(args):
             v['method'] == args.method):
             print('Experiment has been run before:', v)
             return
-
     
     uuid = str(uuid4())
     print(uuid)
@@ -145,7 +145,7 @@ def run_old(args):
 
     if not generation_id:
         print("Calling prompt_generation.py...")
-        prompt_generation_cmd = f'''srun --gpus-per-node=1 -J \"mice\" -A overcap -p overcap python {src}/prompt_generation.py 0 --generation {args.generation} --in_context {args.in_context} --max_num_prompts {args.max_num_prompts} --uuid {uuid}'''
+        prompt_generation_cmd = f'''python {src}/prompt_generation.py 0 --generation {args.generation} --in_context {args.in_context} --max_num_prompts {args.max_num_prompts} --uuid {uuid}'''       
         print(prompt_generation_cmd)
         prompt_generation = subprocess.run(prompt_generation_cmd.split(" "), 
                                 stdout=subprocess.PIPE, text=True, check=True)

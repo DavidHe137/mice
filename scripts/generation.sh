@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name mice-generation
-#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/%Ageneration.out
-#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/%Ageneration.err
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/generation_%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/generation_%A.err
 #SBATCH --gres=gpu:1
 #SBATCH --partition=overcap
 #SBATCH --account=overcap

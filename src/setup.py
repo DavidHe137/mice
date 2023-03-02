@@ -13,7 +13,7 @@ def main():
     '''
     parser = argparse.ArgumentParser(description='Configure dataset.')
 
-    parser.add_argument('--dataset', choices=['BoolQ'])
+    parser.add_argument('--dataset', choices=['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC'])
     parser.add_argument('--train', type=int)
     parser.add_argument('--test', type=int)
     parser.add_argument('--uuid', type=str)
