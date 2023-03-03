@@ -3,9 +3,11 @@
 #SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/%a.out
 #SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/%a.err
 #SBATCH --gres=gpu:1
+#SBATCH --constraint=titan_x|rtx_6000|a40
+#SBATCH --cpus-per-task 6
 #SBATCH --partition=overcap
 #SBATCH --account=overcap
-#SBATCH --time 10
+#SBATCH --time 15
 #SBATCH --requeue
 #NOTE: time should depend on model size
 #NOTE: specify --array when invoking sbatch

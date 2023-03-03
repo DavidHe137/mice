@@ -47,7 +47,6 @@ def compute_prompt_probs_similar(
     all_prompt_scores = dict()
     for prompt_id in prompt_map:
         prompt_str = str(tuple(prompt_id))
-        print(prompt_str)
         assert(prompt_str) in predictions
 
         all_prompt_scores[prompt_str] = sum(
@@ -141,6 +140,7 @@ def main():
 
     # generate mention_counts
     predictions = dict()
+    failed_predictions = []
     for example_id, example in test_data.items():
 
         example_dir = os.path.join(examples_dir, str(example_id))
@@ -149,6 +149,7 @@ def main():
         # read in predictions
         if not os.path.exists(predictions_filepath):
             print("example_id=%s does not have predictions" % example_id)
+            failed_predictions.append(example_id)
             continue
         example_predictions = read_json(predictions_filepath)
 
@@ -195,7 +196,7 @@ def main():
         )
 
     # output the predictions
-    predictions_filepath = os.path.join(generation_dir, args.model, f"{args.method}_predictions.json")
+    predictions_filepath = os.path.join(generation_dir, args.model.lower(), f"{args.method}_predictions.json")
     write_json(predictions, predictions_filepath)
 
     super_glue_metric = load('super_glue', exp_info['dataset'].lower()) 
@@ -222,7 +223,8 @@ def main():
         'generation': exp_info['generations'][generation_id],
         'model': args.model,
         'method': args.method,
-        'result': result
+        'result': result,
+        'failed_predictions': failed_predictions
     }
     
     project_root = Path(__file__).resolve().parents[1]

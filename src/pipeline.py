@@ -164,7 +164,7 @@ def run_old(args):
 
             #Aggregation
         print("Batching aggregation.py...")
-        aggregation_cmd = f'''sbatch --dependency=afterok{dependencies} {scripts}/aggregation.sh 0 0 {args.model} {args.method} {uuid}'''
+        aggregation_cmd = f'''sbatch --dependency=afterany{dependencies} {scripts}/aggregation.sh 0 0 {args.model} {args.method} {uuid}'''
         print(aggregation_cmd)
         aggregation = subprocess.run(aggregation_cmd.split(" "), 
                                 stdout=subprocess.PIPE, text=True, check=True)
@@ -227,7 +227,7 @@ def run_clean(args):
 
     #Aggregation
     print("Batching aggregation.py...")
-    aggregation_cmd = f'''sbatch --dependency=afterok{dependencies} {scripts}/aggregation.sh 0 0 {args.model} {args.method} {uuid}'''
+    aggregation_cmd = f'''sbatch --dependency=afterany{dependencies} {scripts}/aggregation.sh 0 0 {args.model} {args.method} {uuid}'''
     print(aggregation_cmd)
     aggregation = subprocess.run(aggregation_cmd.split(" "), 
                             stdout=subprocess.PIPE, text=True, check=True)
