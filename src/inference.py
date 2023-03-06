@@ -112,8 +112,8 @@ def main():
     generation_id = args.generation_id
     if args.uuid:
         log = get_log_with_uuid(args.uuid)
-        experiment_id = str(log['experiment_id'])
-        generation_id = str(log['generation_id'])
+        experiment_id = log['experiment_id']
+        generation_id = log['generation_id']
 
     exp_info = get_experiment_info(experiment_id)
 
@@ -133,7 +133,7 @@ def main():
               "6.7b": "facebook/opt-6.7B"}
 
     print("Load model...", end="")
-    model_name = models[args.model]
+    model_name = models[args.model.lower()]
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
     model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
     max_generated_len = 16 #NOTE: for SuperGLUE

@@ -1,6 +1,6 @@
 import json
 import os
-from pathlib import Path
+import config
 
 def read_jsonl(filepath: str) -> dict:
     data = []
@@ -46,10 +46,7 @@ def write_json(d: dict, filepath: str) -> None:
         json.dump(d, f, indent=4)
 
 def get_experiment_info(experiment_id: str) -> dict():
-    project_root = Path(__file__).resolve().parents[1]
-    exp_home = os.path.join(project_root, 'experiments')
-
-    exp_summary = os.path.join(exp_home, 'summary.json')
+    exp_summary = os.path.join(config.experiments, 'summary.json')
 
     exp_info = {}
     if os.path.exists(exp_summary):
@@ -122,6 +119,5 @@ def verbalize(pred: str, dataset: str):
     return templates[dataset](pred)
 
 def get_log_with_uuid(uuid: str) -> dict():
-    project_root = Path(__file__).resolve().parents[1]
-    log_file = os.path.join(project_root, 'logs', f"{uuid}.json")
+    log_file = os.path.join(config.logs, f"{uuid}.json")
     return read_json(log_file)

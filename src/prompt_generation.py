@@ -2,6 +2,7 @@ import os
 from math import sqrt
 import argparse
 from utils import *
+import config
 
 from sentence_transformers import SentenceTransformer
 
@@ -70,12 +71,13 @@ def random_generator(train_data, test_data, in_context: int, max_num_prompts: in
     return prompt_map
 
 def bayesian_noise_reduction(in_context: int, max_num_prompts: int) -> dict(list()):
+    #TODO: do this
     print("hi")
 
 def main():
     parser = argparse.ArgumentParser(description='Generate json dictionary consisting of test_idx: train_indices)')
     parser.add_argument('experiment_id', type=str)
-    parser.add_argument('--generation', choices=['similar', 'random', 'bayesian_noise'])
+    parser.add_argument('--ordering', choices=['similar', 'random', 'bayesian_noise'])
     parser.add_argument('--in_context', default=2, type=int)
     parser.add_argument('--max_num_prompts', default=1, type=int) #FIXME: default value
     parser.add_argument('--encoder', default='all-roberta-large-v1', type=str)
@@ -84,10 +86,10 @@ def main():
     #TODO: token limits, generation length
     args = parser.parse_args()
 
-    experiment_id = str(get_log_with_uuid(args.uuid)['experiment_id']) if args.uuid else args.experiment_id
+    experiment_id = get_log_with_uuid(args.uuid)['experiment_id'] if args.uuid else args.experiment_id
 
     exp_info = get_experiment_info(experiment_id)
-    generation_dir = os.path.join(exp_info['location'], 'generations', f"{args.generation}_{args.in_context}_{args.max_num_prompts}_{args.encoder}")
+    generation_dir = os.path.join(exp_info['location'], 'generations', f"{args.ordering}_{args.in_context}_{args.max_num_prompts}_{args.encoder}")
     if os.path.exists(generation_dir):
         print(f"{generation_dir} already exists.")
         return
@@ -98,10 +100,10 @@ def main():
     similarity_map = {}
     prompt_map = {}
 
-    if args.generation == 'similar':
+    if args.ordering == 'similar':
         similarity_map = similarity_scores(train_data, test_data, exp_info['dataset'], args.encoder)
         prompt_map = similar_generator(similarity_map, args.in_context, args.max_num_prompts)
-    elif args.generation == 'random':
+    elif args.ordering == 'random':
         prompt_map = random_generator(train_data, test_data, args.in_context, args.max_num_prompts)
     
     os.makedirs(generation_dir, exist_ok=True)
@@ -118,10 +120,10 @@ def main():
     print("Logging info...", end="")
     info = os.path.join(exp_info['location'], 'info.json')
     info_data = read_json(info)
-    generation_id = len(info_data['generations']) + 1
+    generation_id = max([int(id) for id in info_data['generations'].keys()], default=0) + 1
     info_data['generations'][generation_id] = {'created': str(datetime.now()),
                                                 'location': generation_dir,
-                                                'method': args.generation,
+                                                'ordering': args.ordering,
                                                 'in_context': args.in_context,
                                                 'max_num_prompts': args.max_num_prompts,
                                                 'encoder': args.encoder}
@@ -129,14 +131,12 @@ def main():
     print("done!")
 
     if args.uuid:
-        project_root = Path(__file__).resolve().parents[1]
-        log_file = os.path.join(project_root, 'logs', f"{args.uuid}.json")
+        log_file = os.path.join(config.logs, f"{args.uuid}.json")
         log = read_json(log_file)
-        log['generation_id'] = generation_id
+        log['generation_id'] = str(generation_id)
+        log['last_modified'] = str(datetime.now())
         log['status'] = "inference"
-        write_json(log, os.path.join(project_root, "logs", f"{args.uuid}.json"))
-
-
+        write_json(log, os.path.join(config.logs, f"{args.uuid}.json"))
 
 if __name__ == '__main__':
     main()

@@ -2,15 +2,15 @@
 Aggregates prompts. Evaluates as well.
 '''
 from collections import defaultdict
-
 import os
 import argparse
-
-import torch
-from utils import *
 from datetime import datetime
 
+import torch
 from evaluate import load
+
+from utils import *
+import config
 
 def produce_mention_probs(predictions: dict, gold_label: str, dataset: str) -> dict:
     # first produce all indicators
@@ -122,10 +122,14 @@ def main():
     experiment_id = args.experiment_id
     generation_id = args.generation_id
     if args.uuid:
-        log = get_log_with_uuid(args.uuid)
-        experiment_id = str(log['experiment_id'])
-        generation_id = str(log['generation_id'])
+        log_file = os.path.join(config.logs, f"{args.uuid}.json")
+        log = read_json(log_file)
+        log['last_modified'] = str(datetime.now())
+        log['status'] = "aggregation"
+        write_json(log, os.path.join(config.logs, f"{args.uuid}.json"))
 
+        experiment_id = log['experiment_id']
+        generation_id = log['generation_id']
 
     exp_info = get_experiment_info(experiment_id)
     generation_dir = exp_info['generations'][generation_id]['location']        
@@ -136,7 +140,6 @@ def main():
 
     test_data = read_jsonl(os.path.join(exp_info['location'], 'test.jsonl'))  
     test_data = {ex["idx"]: ex for ex in test_data}  
-
 
     # generate mention_counts
     predictions = dict()
@@ -226,9 +229,8 @@ def main():
         'result': result,
         'failed_predictions': failed_predictions
     }
-    
-    project_root = Path(__file__).resolve().parents[1]
-    exp_summary = os.path.join(project_root,'experiments', 'summary.json')
+
+    exp_summary = os.path.join(config.experiments, 'summary.json')
     exp_summary_data = read_json(exp_summary)
     exp_summary_data[experiment_id]['runs'][run_id] = run
     write_json(exp_summary_data, exp_summary)
@@ -237,13 +239,8 @@ def main():
     write_json(exp_info, os.path.join(exp_summary_data[experiment_id]['location'], 'info.json'))
 
     if args.uuid:
-        project_root = Path(__file__).resolve().parents[1]
-        log_file = os.path.join(project_root, 'logs', f"{args.uuid}.json")
-        log = read_json(log_file)
-        log['status'] = "finished"
-        write_json(log, os.path.join(project_root, "logs", f"{args.uuid}.json"))
+        log_file = os.path.join(config.logs, f"{args.uuid}.json")
+        os.remove(log_file)
     
-
-
 if __name__ == "__main__":
     main()

@@ -16,9 +16,9 @@ sys.path.append(os.getcwd())
 import subprocess
 import argparse
 import re
-from pathlib import Path
 from uuid import uuid4
 from utils import *
+import config
 
 def parse():
     parser = argparse.ArgumentParser()
@@ -31,7 +31,7 @@ def parse():
     parser.add_argument('--test', type=int)
 
     #prompt_generation.py
-    parser.add_argument('--generation', default='similar', choices=['similar', 'random', 'bayesian_noise'])
+    parser.add_argument('--ordering', default='similar', choices=['similar', 'random', 'bayesian_noise'])
     parser.add_argument('--in_context', default=2, type=int)
     parser.add_argument('--max_num_prompts', default=1, type=int)
     parser.add_argument('--encoder', default='all-roberta-large-v1', type=str)
@@ -97,17 +97,51 @@ def parse():
 def slurm_job_id(job: subprocess.CompletedProcess[str]) -> str:
     return job.stdout.strip().split(" ")[-1]
 
-def run_old(args):    
-    project_root = "/coc/pskynet6/dhe83/mice" #FIXME: hardcoded    
-    scripts = os.path.join(project_root, 'scripts')
-    src = os.path.join(project_root, 'src')
+def prompt_generation(ordering, in_context, max_num_prompts, uuid):
+    print("Calling prompt_generation.py...")
+    command = f'''python {config.src}/prompt_generation.py 0 --ordering {ordering} --in_context {in_context} --max_num_prompts {max_num_prompts} --uuid {uuid}'''
+    print(command)
+    prompt_generation = subprocess.run(command.split(" "), 
+                            stdout=subprocess.PIPE, text=True, check=True)
+    print(prompt_generation.stdout)
 
+def setup(dataset, train, test, uuid):
+    print("Calling setup.py...")
+    command = f'''python {config.src}/setup.py --dataset {dataset} --train {train} --test {test} --uuid {uuid}'''
+    print(command)
+    setup = subprocess.run(command.split(" "), 
+                            stdout=subprocess.PIPE, text=True, check=True)
+    print(setup.stdout)
+
+def inference(test, model, test_ids_path, uuid) -> str:
+    # NOTE: Returns SLURM job id.
+    print("Queueing inference job array...")
+    command = f'''sbatch --array=1-{test} {config.scripts}/batch_inference.sh 0 0 {model} {test_ids_path} {uuid} '''
+    print(command)
+    inference = subprocess.run(command.split(" "), 
+                            stdout=subprocess.PIPE, text=True, check=True)
+    print(inference.stdout)
+    return f":{slurm_job_id(inference)}"
+
+def aggregation(dependencies, model, method, uuid):
+    dependency_arg = ""
+    if dependencies:
+        dependency_arg = f"--dependency=afterany{dependencies}"
+
+    print("Batching aggregation.py...")
+    command = f'''sbatch {dependency_arg} {config.scripts}/aggregation.sh 0 0 {model} {method} {uuid}'''
+    print(command)
+    aggregation = subprocess.run(command.split(" "), 
+                            stdout=subprocess.PIPE, text=True, check=True)
+    print(aggregation.stdout)
+
+def run_old(args):    
     exp_data = get_experiment_info(args.experiment_id)
 
     #exit if already exists
     for k, v in exp_data['runs'].items():
         g = v['generation']
-        if (g['method'] == args.generation and 
+        if (g['ordering'] == args.ordering and 
             g['in_context'] == args.in_context and 
             g['max_num_prompts'] == args.max_num_prompts and 
             g['encoder'] == args.encoder and
@@ -117,126 +151,70 @@ def run_old(args):
             return
     
     uuid = str(uuid4())
-    print(uuid)
+    print("Run:", uuid)
 
     print("Existing experiment found:")
-    print('dataset', exp_data['dataset'])
-    print('train', exp_data['train'])
-    print('test', exp_data['test'])
+    print('Dataset', exp_data['dataset'])
+    print('Train', exp_data['train'])
+    print('Test', exp_data['test'])
     
     #check if generation exists
     generation_id = None
     for k, v in exp_data['generations'].items():
-        #FIXME: naming consistency
-        if (v['method'] == args.generation and 
+        if (v['ordering'] == args.ordering and 
             v['in_context'] == args.in_context and 
             v['max_num_prompts'] == args.max_num_prompts and 
             v['encoder'] == args.encoder):
             generation_id = k
             break
 
-    log = {'uuid': uuid, 'status': 'prompt_generation'}
-    log['experiment_id'] = int(args.experiment_id)
+    log = {'uuid': uuid, 'experiment_id': args.experiment_id, 'status': 'prompt_generation'}
     if generation_id:
         print("Found generation id:", generation_id)
         log['generation_id'] = int(generation_id)
         log['status'] = 'inference'
-    write_json(log, os.path.join(project_root, "logs", f"{uuid}.json"))
+    write_json(log, os.path.join(config.logs, f"{uuid}.json"))
 
     if not generation_id:
-        print("Calling prompt_generation.py...")
-        prompt_generation_cmd = f'''python {src}/prompt_generation.py 0 --generation {args.generation} --in_context {args.in_context} --max_num_prompts {args.max_num_prompts} --uuid {uuid}'''       
-        print(prompt_generation_cmd)
-        prompt_generation = subprocess.run(prompt_generation_cmd.split(" "), 
-                                stdout=subprocess.PIPE, text=True, check=True)
-        print(prompt_generation.stdout) 
-    
+        prompt_generation(args.ordering, args.in_context, args.max_num_prompts, args.uuid)
+
+    dependencies = ""
     if not(generation_id and os.path.exists(os.path.join(exp_data['generations'][generation_id]['location'], args.model))):
         test_ids_path = os.path.join(exp_data['location'], 'test_ids.txt')
-
-        print("Queueing inference job array...")
-        inference_cmd = f'''sbatch --array=1-{args.test} {scripts}/batch_inference.sh 0 0 {args.model} {test_ids_path} {uuid} '''
-        print(inference_cmd)
-        inference = subprocess.run(inference_cmd.split(" "), 
-                                stdout=subprocess.PIPE, text=True, check=True)
-        print(inference.stdout)
-        dependencies = f":{slurm_job_id(inference)}"
-
-            #Aggregation
-        print("Batching aggregation.py...")
-        aggregation_cmd = f'''sbatch --dependency=afterany{dependencies} {scripts}/aggregation.sh 0 0 {args.model} {args.method} {uuid}'''
-        print(aggregation_cmd)
-        aggregation = subprocess.run(aggregation_cmd.split(" "), 
-                                stdout=subprocess.PIPE, text=True, check=True)
-        print(aggregation.stdout)
-        print("All jobs queued.")
-
+        dependencies = inference(args.test, args.model, test_ids_path, uuid)
 
     else:
         print("Found predictions for", args.model)
-        print("Batching aggregation.py...")
-        aggregation_cmd = f'''sbatch {scripts}/aggregation.sh 0 0 {args.model} {args.method} {uuid}'''
-        print(aggregation_cmd)
-        aggregation = subprocess.run(aggregation_cmd.split(" "), 
-                                stdout=subprocess.PIPE, text=True, check=True)
-        print(aggregation.stdout)
-        print("All jobs queued.") 
+    
+    aggregation(dependencies, args.model, args.method, uuid)
+    print("All jobs queued.")
+
 
 def run_clean(args):
-    project_root = "/coc/pskynet6/dhe83/mice" #FIXME: hardcoded
-    scripts = os.path.join(project_root, 'scripts')
-    src = os.path.join(project_root, 'src')
-
     uuid = str(uuid4())
-    print(uuid)
+    print("Run:", uuid)
 
-    print("Calling setup.py...")
+    setup(args.dataset, args.train, args.test, uuid)
 
-    #Setup
-    setup_cmd = f'''python {src}/setup.py --dataset {args.dataset} --train {args.train} --test {args.test} --uuid {uuid}'''
-    print(setup_cmd)
-    setup = subprocess.run(setup_cmd.split(" "), 
-                            stdout=subprocess.PIPE, text=True, check=True)
-    print(setup.stdout)
-
-
-    #Prompt Generation
-    print("Calling prompt_generation.py...")
-    prompt_generation_cmd = f'''python {src}/prompt_generation.py 0 --generation {args.generation} --in_context {args.in_context} --max_num_prompts {args.max_num_prompts} --uuid {uuid}'''
-    print(prompt_generation_cmd)
-    prompt_generation = subprocess.run(prompt_generation_cmd.split(" "), 
-                            stdout=subprocess.PIPE, text=True, check=True)
-    print(prompt_generation.stdout)
-
+    prompt_generation(args.ordering, args.in_context, args.max_num_prompts, uuid)
 
     #Inference
-    exp_summary = os.path.join(project_root, 'experiments', 'summary.json')
+    exp_summary = os.path.join(config.experiments, 'summary.json')
     exp_summary_data = read_json(exp_summary)
-    log = read_json(os.path.join(project_root, "logs", f"{uuid}.json"))
-    assert str(log['experiment_id']) in exp_summary_data
-    test_ids_path= os.path.join(exp_summary_data[str(log['experiment_id'])]['location'], 'test_ids.txt')
+    log = read_json(os.path.join(config.logs, f"{uuid}.json"))
+    assert log['experiment_id'] in exp_summary_data
+    test_ids_path= os.path.join(exp_summary_data[log['experiment_id']]['location'], 'test_ids.txt')
 
-    print("Queueing inference job array...")
-    inference_cmd = f'''sbatch --array=1-{args.test} {scripts}/batch_inference.sh 0 0 {args.model} {test_ids_path} {uuid} '''
-    print(inference_cmd)
-    inference = subprocess.run(inference_cmd.split(" "), 
-                            stdout=subprocess.PIPE, text=True, check=True)
-    print(inference.stdout)
-    dependencies = f":{slurm_job_id(inference)}"
+    dependencies = inference(args.test, args.model, test_ids_path, uuid)
+    aggregation(dependencies, args.model, args.method, uuid)
 
-
-    #Aggregation
-    print("Batching aggregation.py...")
-    aggregation_cmd = f'''sbatch --dependency=afterany{dependencies} {scripts}/aggregation.sh 0 0 {args.model} {args.method} {uuid}'''
-    print(aggregation_cmd)
-    aggregation = subprocess.run(aggregation_cmd.split(" "), 
-                            stdout=subprocess.PIPE, text=True, check=True)
-    print(aggregation.stdout)
     print("All jobs queued.")
+  
 
 def validate(args):
     print("validate")
 
-
 if __name__ == "__main__":
+    os.makedirs(config.experiments, exist_ok=True)
+    os.makedirs(config.logs, exist_ok=True)
     parse()
