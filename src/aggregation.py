@@ -113,7 +113,7 @@ def main():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('experiment_id', type=str)
     parser.add_argument('generation_id', type=str)
-    parser.add_argument('model', type=str)
+    parser.add_argument('model', type=str.lower)
     parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'majority-vote'], type=str)
     parser.add_argument('--uuid', type=str)
 
@@ -199,7 +199,7 @@ def main():
         )
 
     # output the predictions
-    predictions_filepath = os.path.join(generation_dir, args.model.lower(), f"{args.method}_predictions.json")
+    predictions_filepath = os.path.join(generation_dir, args.model, f"{args.method}_predictions.json")
     write_json(predictions, predictions_filepath)
 
     super_glue_metric = load('super_glue', exp_info['dataset'].lower()) 

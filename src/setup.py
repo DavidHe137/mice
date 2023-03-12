@@ -49,7 +49,6 @@ def main():
 
     summary = {
         'created': str(datetime.now()),
-        'last_modified': str(datetime.now()),
         'location': exp_dir,
         'dataset': args.dataset,
         'train': args.train,

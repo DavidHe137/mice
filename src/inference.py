@@ -1,12 +1,67 @@
 import os
 import json
 import argparse
-
 from transformers import AutoTokenizer, AutoModelForCausalLM
-
 from utils import *
 
-def create_model_input(
+# llama imports
+from pathlib import Path
+from typing import Tuple
+import sys
+import torch
+import time
+from fairscale.nn.model_parallel.initialize import initialize_model_parallel
+
+sys.path.append(config.llama)
+from llama import ModelArgs, Transformer, Tokenizer, LLaMA
+
+def setup_model_parallel() -> Tuple[int, int]:
+    local_rank = int(os.environ.get("LOCAL_RANK", -1))
+    world_size = int(os.environ.get("WORLD_SIZE", -1))
+
+    torch.distributed.init_process_group("nccl")
+    initialize_model_parallel(world_size)
+    torch.cuda.set_device(local_rank)
+
+    # seed must be the same in all processes
+    torch.manual_seed(1)
+    return local_rank, world_size
+
+def load_llama(
+    ckpt_dir: str,
+    local_rank: int,
+    world_size: int,
+    max_seq_len: int,
+    max_batch_size: int
+) -> LLaMA:
+    tokenizer_path = os.path.join(config.llama, "checkpoints",  "tokenizer.model")
+
+    start_time = time.time()
+    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+    assert world_size == len(
+        checkpoints
+    ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {world_size}"
+    ckpt_path = checkpoints[local_rank]
+    print("Loading")
+    checkpoint = torch.load(ckpt_path, map_location="cpu")
+    with open(Path(ckpt_dir) / "params.json", "r") as f:
+        params = json.loads(f.read())
+
+    model_args: ModelArgs = ModelArgs(
+        max_seq_len=max_seq_len, max_batch_size=max_batch_size, **params
+    )
+    tokenizer = Tokenizer(model_path=tokenizer_path)
+    model_args.vocab_size = tokenizer.n_words
+    torch.set_default_tensor_type(torch.cuda.HalfTensor)
+    model = Transformer(model_args)
+    torch.set_default_tensor_type(torch.FloatTensor)
+    model.load_state_dict(checkpoint, strict=False)
+
+    generator = LLaMA(model, tokenizer)
+    print(f"Loaded in {time.time() - start_time:.2f} seconds")
+    return generator
+
+def create_opt_model_input(
     test_example, train_examples, dataset, tokenizer
 ):
     #TODO: worry about input len at some point
@@ -18,6 +73,83 @@ def create_model_input(
 
     return {"input_text": input_text, "input_tokens": input_tokens}
 
+def create_llama_model_input(
+    test_example, train_examples, dataset
+):
+    #TODO: worry about input len at some point
+    demonstrations = ''.join(list(map(lambda x: format_example(x, dataset, includeLabel=True), train_examples)))
+    test_input = format_example(test_example, dataset)
+
+    return demonstrations + test_input
+
+def predict_with_llama(
+    dataset,
+    test_example,
+    train_data,
+    prompts,
+    model,
+    max_context_len,
+    max_generated_len,
+    predictions,  
+) -> dict:
+    
+    # max_input_len = 2048 - max_generated_len
+
+    # make predictions
+    prev_num_predictions = len(predictions.keys())
+    cur_num_predictions = prev_num_predictions
+    for (train_id1, train_id2) in prompts:
+
+        if str((train_id1, train_id2)) in predictions:
+            continue
+
+        try:
+            input = create_llama_model_input(
+                test_example,
+                [train_data[train_id1],train_data[train_id2]],
+                dataset,
+            )
+            print(f"Making predictions for prompt={str((train_id1, train_id2))}")
+            generated_text = model.generate([input],
+                                            max_gen_len=max_generated_len,
+                                            temperature=0.8,
+                                            top_p=0.95
+                                            )
+
+            print("generated_text=", generated_text)
+
+            prediction = extract_prediction(generated_text[0], dataset)
+            print("prediction=", prediction)
+
+            predictions[str((train_id1, train_id2))] = {
+                "input_text": input,
+                "output_text": generated_text,
+                "prediction": prediction,
+                "label": test_example["label"]
+            }
+        except Exception as e:
+            print(
+                f"{str((train_id1, train_id2))} has some problem."
+            )
+            print(e)
+            predictions[str((train_id1, train_id2))] = {
+                "input_text": input,
+                "output_text": "",
+                "prediction": "",
+                "label": test_example["label"]
+            }
+        cur_num_predictions += 1
+
+        # save every 10 examples
+        if cur_num_predictions % 10 == 0:
+            break
+
+    return (
+        predictions,
+        cur_num_predictions == prev_num_predictions,
+    )
+
+    
 
 def predict_with_gptj(
     dataset,
@@ -42,7 +174,7 @@ def predict_with_gptj(
             continue
 
         try:
-            input = create_model_input(
+            input = create_opt_model_input(
                 test_example,
                 [train_data[train_id1],train_data[train_id2]],
                 dataset,
@@ -102,8 +234,9 @@ def main():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('experiment_id', type=str)
     parser.add_argument('generation_id', type=str)
-    parser.add_argument('test_id', type=str)
-    parser.add_argument('--model', default="125m", type=str)
+    parser.add_argument('slurm_array_task_id', type=str)
+    parser.add_argument('--test_id', type=str)
+    parser.add_argument('model', type=str.lower)
     parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
@@ -117,31 +250,52 @@ def main():
 
     exp_info = get_experiment_info(experiment_id)
 
+    test_id = args.test_id if args.test_id else exp_info['test_ids'][int(args.slurm_array_task_id)]
+    test_id = str(test_id)
+
     train_data = read_jsonl(os.path.join(exp_info['location'], 'train.jsonl'))
     test_data = read_jsonl(os.path.join(exp_info['location'], 'test.jsonl'))
 
     train_data = {ex["idx"]: ex for ex in train_data}
     test_data = {ex["idx"]: ex for ex in test_data}
 
-    test_example = test_data[int(args.test_id)]
+    test_example = test_data[int(test_id)]
     assert test_example
 
-    models = {"125m": "facebook/opt-125m",
-              "350m": "facebook/opt-350m",
-              "1.3b": "facebook/opt-1.3B",
-              "2.7b": "facebook/opt-2.7B",
-              "6.7b": "facebook/opt-6.7B"}
-
-    print("Load model...", end="")
-    model_name = models[args.model.lower()]
-    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-    model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
+    models = {"opt-125m": "facebook/opt-125m",
+              "opt-350m": "facebook/opt-350m",
+              "opt-1.3b": "facebook/opt-1.3B",
+              "opt-2.7b": "facebook/opt-2.7B",
+              "opt-6.7b": "facebook/opt-6.7B",
+              "llama-7b": "7B"}
+    
+    model_name = models[args.model]
     max_generated_len = 16 #NOTE: for SuperGLUE
     max_context_len = 2048
+
+    print(f"Load {args.model}...", end="")
+    model = None
+    if "llama" in args.model:
+        #TODO: optimize llama inference
+        max_seq_len = 1024
+        max_batch_size = 32
+
+        ckpt_dir = os.path.join(config.llama, "checkpoints", model_name)
+
+        local_rank, world_size = setup_model_parallel()
+        if local_rank > 0:
+            sys.stdout = open(os.devnull, "w")
+
+        model = load_llama(
+            ckpt_dir, local_rank, world_size, max_seq_len, max_batch_size
+        )
+    else:    
+        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
+        model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
     print("done!")
 
     generation_dir = exp_info['generations'][generation_id]['location']
-    example_dir = os.path.join(generation_dir, args.model, args.test_id)
+    example_dir = os.path.join(generation_dir, args.model, test_id)
     os.makedirs(example_dir, exist_ok=True)
 
     predictions = {}
@@ -161,17 +315,29 @@ def main():
     # make predictions
     end_prediction = False
     while not end_prediction:
-        predictions, end_prediction = predict_with_gptj(
+        if "llama" in args.model:
+            predictions, end_prediction = predict_with_llama(
             exp_info['dataset'],
             test_example,
             train_data,
-            prompt_map[args.test_id],
+            prompt_map[test_id],
             model,
-            tokenizer,
             max_context_len,
             max_generated_len,
             predictions,
-        )
+            )
+        else:
+            predictions, end_prediction = predict_with_gptj(
+                exp_info['dataset'],
+                test_example,
+                train_data,
+                prompt_map[test_id],
+                model,
+                tokenizer,
+                max_context_len,
+                max_generated_len,
+                predictions,
+            )
 
         print("Save %s predictions..." % len(predictions.keys()), end="")
 
