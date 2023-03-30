@@ -1,7 +1,21 @@
+#!/usr/bin/env python3
+#SBATCH --job-name mice-inference
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/inference/%a.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/inference/%a.err
+#SBATCH --gres=gpu:1
+#SBATCH --constraint=a40
+#SBATCH --cpus-per-task 6
+#SBATCH --partition=overcap
+#SBATCH --account=overcap
+#SBATCH --time 15
+#SBATCH --requeue
+
 import os
+import sys
 import json
 import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM
+sys.path.append(os.getcwd()) 
 from utils import *
 
 # llama imports
@@ -14,6 +28,8 @@ from fairscale.nn.model_parallel.initialize import initialize_model_parallel
 
 sys.path.append(config.llama)
 from llama import ModelArgs, Transformer, Tokenizer, LLaMA
+
+SLURM_ARRAY_TASK_ID = os.getenv('SLURM_ARRAY_TASK_ID')
 
 def setup_model_parallel() -> Tuple[int, int]:
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -61,14 +77,22 @@ def load_llama(
     print(f"Loaded in {time.time() - start_time:.2f} seconds")
     return generator
 
-def create_opt_model_input(
-    test_example, train_examples, dataset, tokenizer
+
+def format_prompt(
+    test_example, train_examples, dataset
 ):
-    #TODO: worry about input len at some point
     demonstrations = ''.join(list(map(lambda x: format_example(x, dataset, includeLabel=True), train_examples)))
     test_input = format_example(test_example, dataset)
 
     input_text = demonstrations + test_input
+
+    return input_text
+
+def create_opt_model_input(
+    test_example, train_examples, dataset, tokenizer
+):
+    #TODO: worry about input len at some point
+    input_text = format_prompt(test_example, train_examples, dataset)
     input_tokens = tokenizer.encode(input_text, return_tensors="pt").cuda()
 
     return {"input_text": input_text, "input_tokens": input_tokens}
@@ -149,9 +173,7 @@ def predict_with_llama(
         cur_num_predictions == prev_num_predictions,
     )
 
-    
-
-def predict_with_gptj(
+def predict_with_opt(
     dataset,
     test_example,
     train_data,
@@ -213,7 +235,7 @@ def predict_with_gptj(
             )
             print(e)
             predictions[str((train_id1, train_id2))] = {
-                "input_text": input["input_text"],
+                "input_text": input,
                 "output_text": "",
                 "prediction": "",
                 "label": test_example["label"]
@@ -229,14 +251,48 @@ def predict_with_gptj(
         cur_num_predictions == prev_num_predictions,
     )
 
+def predict_batch(
+    tokenizer,
+    model,
+    test_example:dict,
+    prompts:list(list(str)),
+    train_data,
+    dataset:str,
+    max_generated_len:int,
+    batch_size: int,
+):    
+
+    train_ids = [tuple(ids) for ids in prompts] 
+    preds = []
+
+    input_text = [format_prompt(test_example, 
+                                [train_data[train_id] for train_id in prompt], 
+                                dataset, tokenizer) for prompt in prompts]
+    batch_tokens = tokenizer(input_text, padding=True, return_tensors="pt").to('cuda:0')
+
+    num_batches = round(batch_tokens['input_ids'].shape[0] / batch_size + 0.5)
+    for batch in batch_tokens['input_ids'].chunk(num_batches):
+        outputs = model.generate(
+            batch,
+            max_new_tokens=max_generated_len,
+            temperature=0,
+            return_dict_in_generate=True,
+            output_scores=True,
+            eos_token_id=198,  # special character 'ċ' (bytecode for new line?) NOTE use this for generation
+        )
+
+        preds.extend(tokenizer.batch_decode(outputs.sequences[:, -max_generated_len:]))
+    
+    results = {x[0]: x[1] for x in zip(train_ids, preds)}
 
 def main():
     parser = argparse.ArgumentParser(description='')
+    parser.add_argument('--test_id', type=str)
     parser.add_argument('experiment_id', type=str)
     parser.add_argument('generation_id', type=str)
-    parser.add_argument('slurm_array_task_id', type=str)
-    parser.add_argument('--test_id', type=str)
+
     parser.add_argument('model', type=str.lower)
+
     parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
@@ -250,8 +306,10 @@ def main():
 
     exp_info = get_experiment_info(experiment_id)
 
-    test_id = args.test_id if args.test_id else exp_info['test_ids'][int(args.slurm_array_task_id)]
-    test_id = str(test_id)
+
+
+    test_ids = [exp_info['test_ids'][i] for i in range(int(SLURM_ARRAY_TASK_ID), int(SLURM_ARRAY_TASK_ID) + config.tests_per_gpu)]
+    print(test_ids)
 
     train_data = read_jsonl(os.path.join(exp_info['location'], 'train.jsonl'))
     test_data = read_jsonl(os.path.join(exp_info['location'], 'test.jsonl'))
@@ -259,8 +317,11 @@ def main():
     train_data = {ex["idx"]: ex for ex in train_data}
     test_data = {ex["idx"]: ex for ex in test_data}
 
-    test_example = test_data[int(test_id)]
-    assert test_example
+    test_examples = [test_data[i] for i in test_ids]
+    print(test_examples)
+
+
+
 
     models = {"opt-125m": "facebook/opt-125m",
               "opt-350m": "facebook/opt-350m",
@@ -272,6 +333,14 @@ def main():
     model_name = models[args.model]
     max_generated_len = 16 #NOTE: for SuperGLUE
     max_context_len = 2048
+
+    batch_sizes = {"opt-125m": 64,
+              "opt-350m": 32,
+              "opt-1.3b": 16,
+              "opt-2.7b": 8,
+              "opt-6.7b": 4,
+              "llama-7b": 4}
+    batch_size = batch_sizes[args.model]
 
     print(f"Load {args.model}...", end="")
     model = None
@@ -290,9 +359,10 @@ def main():
             ckpt_dir, local_rank, world_size, max_seq_len, max_batch_size
         )
     else:    
-        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False, padding_side='left')
         model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
     print("done!")
+
 
     generation_dir = exp_info['generations'][generation_id]['location']
     example_dir = os.path.join(generation_dir, args.model, test_id)
@@ -327,7 +397,7 @@ def main():
             predictions,
             )
         else:
-            predictions, end_prediction = predict_with_gptj(
+            predictions, end_prediction = predict_with_opt(
                 exp_info['dataset'],
                 test_example,
                 train_data,

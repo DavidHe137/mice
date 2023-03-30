@@ -1,14 +1,25 @@
+#!/usr/bin/env python3
+#SBATCH --job-name mice-aggregation
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/aggregation/%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/aggregation/%A.err
+#SBATCH --partition=overcap
+#SBATCH --account=overcap
+#SBATCH --time 5
+#SBATCH --requeue
+
 '''
 Aggregates prompts. Evaluates as well.
 '''
 from collections import defaultdict
 import os
+import sys
 import argparse
 from datetime import datetime
+import time
 
 import torch
-from evaluate import load
 
+sys.path.append(os.getcwd()) 
 from utils import *
 import config
 
@@ -59,7 +70,11 @@ def compute_prompt_probs_similar(
     prompt_scores = [all_prompt_scores[prompt_id] for prompt_id in prompt_ids]
 
     # softmax to get the probabilities
-    prompt_probs = torch.tensor(prompt_scores).cuda().softmax(dim=-1)
+
+    start = time.time()
+    prompt_probs = torch.tensor(prompt_scores).softmax(dim=-1)
+    end = time.time()
+    print("time:", end - start)
 
     # map it back to a dictionary
     prompt_probs = {
@@ -126,7 +141,7 @@ def main():
         log = read_json(log_file)
         log['last_modified'] = str(datetime.now())
         log['status'] = "aggregation"
-        write_json(log, os.path.join(config.logs, f"{args.uuid}.json"))
+        write_json(log, log_file)
 
         experiment_id = log['experiment_id']
         generation_id = log['generation_id']
@@ -144,6 +159,7 @@ def main():
     # generate mention_counts
     predictions = dict()
     failed_predictions = []
+    missing_predictions = {}
     for example_id, example in test_data.items():
 
         example_dir = os.path.join(examples_dir, str(example_id))
@@ -155,6 +171,15 @@ def main():
             failed_predictions.append(example_id)
             continue
         example_predictions = read_json(predictions_filepath)
+
+        # Count & delete missing prompts
+        missing = 0
+        for prompt, pred in example_predictions.items():
+            if pred['prediction'] == "":
+                missing+=1
+                del example_predictions[prompt]
+        if missing > 0:
+            missing_predictions[example_id] = missing
 
         # produce raw mention probs (\mathbb{1}(m \in Y_{z,x}))
         gold_label = test_data[example_id]['label']
@@ -202,8 +227,6 @@ def main():
     predictions_filepath = os.path.join(generation_dir, args.model, f"{args.method}_predictions.json")
     write_json(predictions, predictions_filepath)
 
-    super_glue_metric = load('super_glue', exp_info['dataset'].lower()) 
-
     print(args.method)
     print("predictions", [p['prediction'] for p in predictions.values()])
 
@@ -213,10 +236,15 @@ def main():
             
     print("references", [p['label'] for p in predictions.values()])
 
+    correct = 0
+    total = 0
+    for p in predictions.values():
+        if p['prediction'] == p['label']:
+            correct+=1
+        total+=1
 
-    result = super_glue_metric.compute(predictions=[p['prediction'] for p in predictions.values()], 
-                                       references=[p['label'] for p in predictions.values()])
-
+    result = float(correct) / total
+    
     run_id = len(exp_info['runs']) + 1
     if args.uuid:
         run_id = args.uuid
@@ -240,7 +268,10 @@ def main():
 
     if args.uuid:
         log_file = os.path.join(config.logs, f"{args.uuid}.json")
-        os.remove(log_file)
+        log = read_json(log_file)
+        log['last_modified'] = str(datetime.now())
+        log['status'] = "finished"
+        write_json(log, log_file)
     
 if __name__ == "__main__":
     main()

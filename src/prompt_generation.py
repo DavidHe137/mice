@@ -1,17 +1,30 @@
+#!/usr/bin/env python3
+#SBATCH --job-name mice-generation
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/generation/%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/generation/%A.err
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task 6
+#SBATCH --partition=overcap
+#SBATCH --account=overcap
+#SBATCH --time 10
+#SBATCH --requeue
+
 import os
+import sys
 from math import sqrt
 import argparse
-from utils import *
-import config
-
-from sentence_transformers import SentenceTransformer
+from collections import defaultdict
+from datetime import datetime
+import random
 
 import torch
 import torch.nn as nn
-from collections import defaultdict
-from datetime import datetime
+from sentence_transformers import SentenceTransformer
 
-import random
+sys.path.append(os.getcwd()) 
+from utils import *
+import config
+
 def similarity_scores(train_data, test_data, dataset, encoder_model):
 
     model = SentenceTransformer(encoder_model)
@@ -70,7 +83,7 @@ def random_generator(train_data, test_data, in_context: int, max_num_prompts: in
 
     return prompt_map
 
-def bayesian_noise_reduction(in_context: int, max_num_prompts: int) -> dict(list()):
+def bayesian_noise_reduction(in_context: int, max_num_prompts: int, model_name: str) -> dict(list()):
     #TODO: do this
     print("hi")
 
@@ -81,6 +94,7 @@ def main():
     parser.add_argument('--in_context', default=2, type=int)
     parser.add_argument('--max_num_prompts', default=1, type=int) #FIXME: default value
     parser.add_argument('--encoder', default='all-roberta-large-v1', type=str)
+    parser.add_argument('--model_name', type=str)
     parser.add_argument('--uuid', type=str)
 
     #TODO: token limits, generation length
@@ -136,7 +150,7 @@ def main():
         log['generation_id'] = str(generation_id)
         log['last_modified'] = str(datetime.now())
         log['status'] = "inference"
-        write_json(log, os.path.join(config.logs, f"{args.uuid}.json"))
+        write_json(log, log_file)
 
 if __name__ == '__main__':
     main()

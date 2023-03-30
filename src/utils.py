@@ -58,6 +58,10 @@ def get_experiment_info(experiment_id: str) -> dict():
 
     return exp_info
 
+def get_log_with_uuid(uuid: str) -> dict():
+    log_file = os.path.join(config.logs, f"{uuid}.json")
+    return read_json(log_file)
+
 def format_example(example : dict, dataset: str, includeLabel=False) -> str:
     superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']
     assert dataset in superGLUE
@@ -118,6 +122,9 @@ def verbalize(pred: str, dataset: str):
 
     return templates[dataset](pred)
 
-def get_log_with_uuid(uuid: str) -> dict():
-    log_file = os.path.join(config.logs, f"{uuid}.json")
-    return read_json(log_file)
+def evaluate(pred: list, labels: list, dataset: str) -> float:
+    def accuracy(pred: list, labels: list):
+        correct = 0
+        total = 0
+    return 0.0
+

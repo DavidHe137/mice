@@ -3,6 +3,7 @@
 #SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/inference/%a.out
 #SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/inference/%a.err
 #SBATCH --gres=gpu:1
+#SBATCH --constraint=a40
 #SBATCH --cpus-per-task 6
 #SBATCH --partition=overcap
 #SBATCH --account=overcap

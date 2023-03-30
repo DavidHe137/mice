@@ -1,9 +1,20 @@
+#!/usr/bin/env python3
+#SBATCH --job-name mice-setup
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/setup/%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/setup/%A.err
+#SBATCH --partition=overcap
+#SBATCH --account=overcap
+#SBATCH --time 5
+#SBATCH --requeue
+
 import os
+import sys
 import argparse
 import random
 from datetime import datetime
 from copy import deepcopy
 
+sys.path.append(os.getcwd()) 
 from utils import *
 import config
 
@@ -36,9 +47,9 @@ def main():
 
     # sample k demonstrations for n test examples
     # TODO: bounds for sampling numbers
-    train_data = random.choices(train_data, k=args.train)
+    train_data = random.sample(train_data, k=args.train)
     if args.test > 0: # pass < 1 to test all examples
-        test_data = random.choices(test_data, k=args.test)
+        test_data = random.sample(test_data, k=args.test)
     else:
         args.test = len(test_data)
     train_data.sort(key=lambda x: x['idx'])
@@ -66,7 +77,6 @@ def main():
     os.makedirs(exp_dir, exist_ok=True)
     write_jsonl(train_data, os.path.join(exp_dir, 'train.jsonl'))
     write_jsonl(test_data, os.path.join(exp_dir, 'test.jsonl'))
-    write_txt([str(example['idx']) for example in test_data], os.path.join(exp_dir, 'test_ids.txt'))
 
     exp_summary_data[exp_id] = summary
     write_json(exp_summary_data, exp_summary)

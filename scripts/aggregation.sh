@@ -2,8 +2,6 @@
 #SBATCH --job-name mice-aggregation
 #SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/outputs/aggregation/%A.out
 #SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/outputs/aggregation/%A.err
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task 6
 #SBATCH --partition=overcap
 #SBATCH --account=overcap
 #SBATCH --time 5
