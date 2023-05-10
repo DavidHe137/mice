@@ -3,7 +3,7 @@ experiments/*
 old_experiments/*
 src/__pycache__
 .vscode
+pyrightconfig.json
 run.log
 logs
-notebooks
 outputs
