@@ -15,11 +15,10 @@ import os
 import sys
 import argparse
 from datetime import datetime
-import time
 
 import torch
 
-sys.path.append(os.getcwd()) 
+sys.path.append("/coc/pskynet6/dhe83/mice/src") 
 from utils import *
 import config
 
@@ -71,10 +70,7 @@ def compute_prompt_probs_similar(
 
     # softmax to get the probabilities
 
-    start = time.time()
     prompt_probs = torch.tensor(prompt_scores).softmax(dim=-1)
-    end = time.time()
-    print("time:", end - start)
 
     # map it back to a dictionary
     prompt_probs = {

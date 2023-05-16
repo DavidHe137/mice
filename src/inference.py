@@ -15,7 +15,8 @@ import sys
 import json
 import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM
-sys.path.append(os.getcwd()) 
+
+sys.path.append("/coc/pskynet6/dhe83/mice/src")
 from utils import *
 
 # llama imports
@@ -114,9 +115,9 @@ def predict_with_llama(
     model,
     max_context_len,
     max_generated_len,
-    predictions,  
+    predictions,
 ) -> dict:
-    
+
     # max_input_len = 2048 - max_generated_len
 
     # make predictions
@@ -255,19 +256,18 @@ def predict_batch(
     tokenizer,
     model,
     test_example:dict,
-    prompts:list(list(str)),
+    prompts,
     train_data,
     dataset:str,
     max_generated_len:int,
     batch_size: int,
-):    
+):
+    train_ids = [tuple(ids) for ids in prompts]
+    output_text = []
 
-    train_ids = [tuple(ids) for ids in prompts] 
-    preds = []
-
-    input_text = [format_prompt(test_example, 
-                                [train_data[train_id] for train_id in prompt], 
-                                dataset, tokenizer) for prompt in prompts]
+    input_text = [format_prompt(test_example,
+                                [train_data[train_id] for train_id in prompt],
+                                dataset) for prompt in prompts]
     batch_tokens = tokenizer(input_text, padding=True, return_tensors="pt").to('cuda:0')
 
     num_batches = round(batch_tokens['input_ids'].shape[0] / batch_size + 0.5)
@@ -281,16 +281,24 @@ def predict_batch(
             eos_token_id=198,  # special character 'ċ' (bytecode for new line?) NOTE use this for generation
         )
 
-        preds.extend(tokenizer.batch_decode(outputs.sequences[:, -max_generated_len:]))
-    
-    results = {x[0]: x[1] for x in zip(train_ids, preds)}
+        output_text.extend(tokenizer.batch_decode(outputs.sequences[:, -max_generated_len:]))
+
+
+    predictions = {}
+    for i, train_ids in enumerate(train_ids):
+        predictions[str(tuple(train_ids))] = {
+                "input_text": input_text[i],
+                "output_text": output_text[i],
+                "prediction": extract_prediction(output_text[i], dataset),
+                "label": test_example["label"]
+            }
+
+    return predictions
 
 def main():
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('--test_id', type=str)
     parser.add_argument('experiment_id', type=str)
     parser.add_argument('generation_id', type=str)
-
     parser.add_argument('model', type=str.lower)
 
     parser.add_argument('--uuid', type=str)
@@ -306,9 +314,10 @@ def main():
 
     exp_info = get_experiment_info(experiment_id)
 
-
-
-    test_ids = [exp_info['test_ids'][i] for i in range(int(SLURM_ARRAY_TASK_ID), int(SLURM_ARRAY_TASK_ID) + config.tests_per_gpu)]
+    test_ids = [exp_info['test_ids'][i] for i in
+                    range(int(SLURM_ARRAY_TASK_ID),
+                        min(int(SLURM_ARRAY_TASK_ID) + config.tests_per_gpu,
+                        len(exp_info['test_ids'])))]
     print(test_ids)
 
     train_data = read_jsonl(os.path.join(exp_info['location'], 'train.jsonl'))
@@ -317,10 +326,7 @@ def main():
     train_data = {ex["idx"]: ex for ex in train_data}
     test_data = {ex["idx"]: ex for ex in test_data}
 
-    test_examples = [test_data[i] for i in test_ids]
-    print(test_examples)
-
-
+    test_examples = {str(i): test_data[i] for i in test_ids}
 
 
     models = {"opt-125m": "facebook/opt-125m",
@@ -329,7 +335,7 @@ def main():
               "opt-2.7b": "facebook/opt-2.7B",
               "opt-6.7b": "facebook/opt-6.7B",
               "llama-7b": "7B"}
-    
+
     model_name = models[args.model]
     max_generated_len = 16 #NOTE: for SuperGLUE
     max_context_len = 2048
@@ -358,23 +364,13 @@ def main():
         model = load_llama(
             ckpt_dir, local_rank, world_size, max_seq_len, max_batch_size
         )
-    else:    
+    else:
         tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False, padding_side='left')
         model = AutoModelForCausalLM.from_pretrained(model_name).cuda()
     print("done!")
 
 
     generation_dir = exp_info['generations'][generation_id]['location']
-    example_dir = os.path.join(generation_dir, args.model, test_id)
-    os.makedirs(example_dir, exist_ok=True)
-
-    predictions = {}
-    predictions_filepath = os.path.join(example_dir, "predictions.json")
-    if os.path.exists(predictions_filepath):
-        print("Recover predictions...", end="")
-        with open(predictions_filepath, "r") as f:
-            predictions = json.load(f)
-        print("done!")
 
     print("Get prompt_map...", end="")
     prompt_map_filepath = os.path.join(generation_dir, "prompt_map.json")
@@ -383,41 +379,40 @@ def main():
     print("done!")
 
     # make predictions
-    end_prediction = False
-    while not end_prediction:
-        if "llama" in args.model:
-            predictions, end_prediction = predict_with_llama(
-            exp_info['dataset'],
-            test_example,
-            train_data,
-            prompt_map[test_id],
-            model,
-            max_context_len,
-            max_generated_len,
-            predictions,
-            )
-        else:
-            predictions, end_prediction = predict_with_opt(
-                exp_info['dataset'],
-                test_example,
-                train_data,
-                prompt_map[test_id],
-                model,
-                tokenizer,
-                max_context_len,
-                max_generated_len,
-                predictions,
-            )
+    for id, example in test_examples.items():
+        try:
+            example_dir = os.path.join(generation_dir, args.model, id)
+            os.makedirs(example_dir, exist_ok=True)
 
-        print("Save %s predictions..." % len(predictions.keys()), end="")
+            predictions = {}
+            predictions_filepath = os.path.join(example_dir, "predictions.json")
+            monitor_filepath = os.path.join(example_dir, "monitoring.json")
 
-        # save outputs and monitor information
-        with open(predictions_filepath, "w") as f:
-            json.dump(predictions, f, indent=4)
-        monitor_filepath = os.path.join(example_dir, "monitoring.json")
-        with open(monitor_filepath, "w") as f:
-            json.dump({"num_predictions": len(predictions.keys())}, f, indent=4)
-        print("done!")
+            if os.path.exists(monitor_filepath):
+                monitor = read_json(monitor_filepath)
+                if monitor['num_predictions'] == len(prompt_map[id]):
+                    print(f"Example {id} already has predictions")
+                    continue
+
+            example_dir = os.path.join(generation_dir, args.model, id)
+            os.makedirs(example_dir, exist_ok=True)
+
+            predictions = predict_batch(tokenizer, model,
+                                        example, prompt_map[id],
+                                        train_data, exp_info['dataset'],
+                                        max_generated_len, batch_size)
+
+            # save outputs and monitor information
+            with open(predictions_filepath, "w") as f:
+                json.dump(predictions, f, indent=4)
+            with open(monitor_filepath, "w") as f:
+                json.dump({"num_predictions": len(predictions.keys())}, f, indent=4)
+            print("Finished example", id)
+        except Exception as e:
+            print(
+                f"Example {id} has some problem."
+            )
+            print(e)
 
 
 if __name__ == "__main__":

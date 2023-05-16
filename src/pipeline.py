@@ -13,7 +13,7 @@ import subprocess
 import argparse
 from uuid import uuid4
 
-sys.path.append(os.getcwd()) 
+sys.path.append("/coc/pskynet6/dhe83/mice/src") 
 from utils import *
 import config
 
@@ -40,12 +40,10 @@ def parse():
 
     args = parser.parse_args()
     
-    tests_per_gpu = 8
-
     if args.experiment_id:
-        run_existing(args, tests_per_gpu)
+        run_existing(args)
     else:
-        run_clean(args, tests_per_gpu)
+        run_clean(args)
 
 def slurm_job_id(job: subprocess.CompletedProcess[str]) -> str:
     return job.stdout.strip().split(" ")[-1]
@@ -77,12 +75,12 @@ def prompt_generation(ordering, in_context, max_num_prompts, uuid, dependencies=
     print(prompt_generation.stdout)
     return slurm_job_id(prompt_generation)
 
-def inference(test, tests_per_gpu, model, uuid, dependencies=[]) -> str:
+def inference(test, model, uuid, dependencies=[]) -> str:
     # FIXME: can't rely on test if testing whole dataset
     dependencies = format_dependencies(dependencies) if dependencies else ""
 
     print("Queueing inference job array...")
-    command = f'''sbatch {dependencies} --array=0-{test}:{tests_per_gpu} {config.src}/inference.py 0 0 {model} --uuid {uuid} '''
+    command = f'''sbatch {dependencies} --array=0-{test}:{config.tests_per_gpu} {config.src}/inference.py 0 0 {model} --uuid {uuid} '''
     print(command)
     inference = subprocess.run(command.split(), 
                             stdout=subprocess.PIPE, text=True, check=True)
@@ -100,7 +98,7 @@ def aggregation(model, method, uuid, dependencies=[]):
     print(aggregation.stdout)
     return slurm_job_id(aggregation)
 
-def run_existing(args, tests_per_gpu):    
+def run_existing(args):    
     uuid = str(uuid4())
     print("Run:", uuid)
 
@@ -109,7 +107,9 @@ def run_existing(args, tests_per_gpu):
     print("Existing experiment found:")
     print('Dataset', exp_data['dataset'])
     print('Train', exp_data['train'])
-    print('Test', exp_data['test'])            
+    print('Test', exp_data['test']) 
+
+    test = exp_data['test']           
 
     #check if generation exists
     generation_id = None
@@ -124,27 +124,30 @@ def run_existing(args, tests_per_gpu):
     log = {'uuid': uuid, 'experiment_id': args.experiment_id, 'status': 'prompt_generation'}
     if generation_id:
         print("Found generation id:", generation_id)
-        log['generation_id'] = int(generation_id)
+        log['generation_id'] = generation_id
         log['status'] = 'inference'
     write_json(log, os.path.join(config.logs, f"{uuid}.json"))
 
+    dependencies = []
     # prompt generation
     if not generation_id:
-        prompt_generation(args.ordering, args.in_context, args.max_num_prompts, args.uuid)
+        generation_job = prompt_generation(args.ordering, args.in_context, args.max_num_prompts, args.uuid)
+        dependencies.append(generation_job)
 
+    #TODO: loop through all examples and check for existing
     # inference
-    dependencies = ""
     if not(generation_id and os.path.exists(os.path.join(exp_data['generations'][generation_id]['location'], args.model))):
-        dependencies = inference(args.test, tests_per_gpu, args.model, uuid)
+        inference_job = inference(test, args.model, uuid, dependencies=dependencies)
+        dependencies.append(inference_job)
 
     else:
         print("Found predictions for", args.model)
     
-    aggregation(dependencies, args.model, args.method, uuid)
+    aggregation(args.model, args.method, uuid, dependencies=dependencies)
     print("All jobs queued.")
 
 
-def run_clean(args, tests_per_gpu):
+def run_clean(args):
     uuid = str(uuid4())
     print("Run:", uuid)
 
@@ -155,7 +158,7 @@ def run_clean(args, tests_per_gpu):
     generation_job = prompt_generation(args.ordering, args.in_context, args.max_num_prompts, uuid, dependencies=setup_job)
 
     # run inference 
-    inference_job = inference(args.test, tests_per_gpu, args.model, uuid, dependencies=generation_job)
+    inference_job = inference(args.test, args.model, uuid, dependencies=generation_job)
 
     # aggregate, evaluate, report results
     aggregation(args.model, args.method, uuid, dependencies=inference_job)

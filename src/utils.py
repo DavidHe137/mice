@@ -66,12 +66,29 @@ def format_example(example : dict, dataset: str, includeLabel=False) -> str:
     superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']
     assert dataset in superGLUE
 
+    def WSC(example:dict)->str:
+        text = example['text']
+        pronoun = example['target']['span2_text']
+        start = example['target']['span2_index']
+        end = start + len(pronoun)
+        assert pronoun == text[start:end]
+
+        passage = "".join([text[0:start],"*", text[start:end], "*", text[end:]])
+        return f"Final Exam with Answer Key\
+                            \nInstructions: Please carefully read the following passages. For each passage, you must identify which noun the pronoun marked in *bold* refers to.\
+                            \n=====\
+                            \nPassage: {passage}\
+                            \nQuestion: In the passage above, what does the pronoun \"*{pronoun}*\" refer to?\
+                            \nAnswer:"
+
+
     templates = {
-        'BoolQ' : lambda ex: f"Passage: {ex['passage']}\nQuestion: {ex['question']}\nAnswer:",
+            'BoolQ' : lambda ex: f"Context: {ex['passage']}\nQuestion: {ex['question']}\nAnswer:",
+        'CB' : lambda ex: f"{ex['premise']}\nQuestion: {ex['hypothesis']}. Frue, False, or Neither?",
+        'RTE' : lambda ex: f"{ex['premise']}\nQuestion: {ex['hypothesis']}. True or False?",
+        'WiC' : lambda ex: f"{ex['sentence1']}\n{ex['sentence2']}\nquestion: Is the word \'{ex['word']}\' used in the same sense in the two sentences above?",
+        'WSC' : lambda ex: f"Passage: {ex['text']}\nQuestions: In the passage above, does the pronoun \"{ex['target']['span2_text']}\" refer to {ex['target']['span1_text']}?\nAnswer:",
         'COPA' : lambda ex: f"Premise: {ex['premise']}\nQuestion: What's the {ex['question']} of this?\nAlternative 1: {ex['choice1']}\nAlternative 2: {ex['choice2']}\nCorrect Alternative:",
-        'WSC' : lambda ex: f"Text: {ex['text']}\nQuestion: Does {ex['target']['span2_text']} refer to {ex['target']['span1_text']}?\nAnswer:", 
-        'WiC' : lambda ex: f"Context 1: {ex['sentence1']}\nContext 2: {ex['sentence2']}\nWord: {ex['word']}\nSense Match:", 
-        'RTE' : lambda ex: f"Text: {ex['premise']}\nHypothesis: {ex['hypothesis']}\nEntailment:"
     }
 
     text = templates[dataset](example)
@@ -101,9 +118,9 @@ def extract_prediction(output: str, dataset: str):
 def verbalize(pred: str, dataset: str):
     superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']
     assert dataset in superGLUE
-    
+
     def isInt(pred: str) -> bool:
-        if pred is None: 
+        if pred is None:
             return False
         try:
             int(pred)
@@ -111,7 +128,7 @@ def verbalize(pred: str, dataset: str):
         except ValueError:
             return False
 
-    
+
     templates = {
         'BoolQ' : lambda pred: pred.lower() in ["yes", "true"],
         'COPA' : lambda pred: int(pred) - 1 if isInt(pred) else "",

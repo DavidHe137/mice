@@ -14,81 +14,109 @@ import random
 from datetime import datetime
 from copy import deepcopy
 
-sys.path.append(os.getcwd()) 
+sys.path.append("/coc/pskynet6/dhe83/mice/src")
 from utils import *
 import config
+from prompts import *
 
-def main():      
+def preprocess_MultiRC(examples:list):
+    for ex in examples:
+        ex = ex['passage']
+        for q in ex['questions']:
+            q["answers"] = {a["idx"]: a for a in q["answers"]}
+        ex["questions"]= {q["idx"]: q for q in ex["questions"]}
+
+def preprocess_ReCoRD(examples:list):
+    for ex in examples:
+        ex["qas"]= {q["idx"]: q for q in ex["qas"]}
+
+def main():
     '''
     Create experiment folder, set up train/test splits, log details
     '''
     parser = argparse.ArgumentParser(description='Configure dataset.')
 
-    parser.add_argument('--dataset', choices=['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC'])
+    parser.add_argument('--dataset', choices=config.tasks)
     parser.add_argument('--train', type=int)
     parser.add_argument('--test', type=int, help="Pass 0 for all test examples")
-    parser.add_argument('--uuid', type=str)
+#   parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
 
-    # gather details
-    exp_summary = os.path.join(config.experiments, 'summary.json') 
+    dataset, train, test = args.dataset, args.train, args.test
+    assert None not in [dataset, train, test]
+
+
     exp_id = 1
+    exp_dir = os.path.join(config.experiments, dataset)
+    os.makedirs(exp_dir, exist_ok=True)
 
-    exp_summary_data = {}
-    if os.path.exists(exp_summary):        
-        exp_summary_data = read_json(exp_summary)
-        exp_id = max([int(_) for _ in exp_summary_data.keys()]) + 1  
+    for experiment in os.listdir(exp_dir):
+        existing_id = int(experiment.split(config.delim)[0])
+        exp_id = max(exp_id, existing_id + 1)
 
-    # read data      
+    # read data
     data_dir = os.path.join(config.data, args.dataset)
     train_data = read_jsonl(os.path.join(data_dir, 'train.jsonl'))
     test_data = read_jsonl(os.path.join(data_dir, 'val.jsonl')) # NOTE: original datasets only have labels for validation
 
+    # Winograd preprocessing
+    if dataset == "Winograd":
+        train_data = [ex for ex in train_data if ex['label']]
+        test_data = [ex for ex in test_data if ex['label']]
+
+    # sampling bounds
+    train = min(len(train_data), train)
+    test = min(len(test_data), test) if test > 0 else len(test_data)
+
     # sample k demonstrations for n test examples
-    # TODO: bounds for sampling numbers
-    train_data = random.sample(train_data, k=args.train)
-    if args.test > 0: # pass < 1 to test all examples
-        test_data = random.sample(test_data, k=args.test)
-    else:
-        args.test = len(test_data)
+    train_data = random.sample(train_data, k=train)
+    test_data = random.sample(test_data, k=test)
+
+    # sort by idx
     train_data.sort(key=lambda x: x['idx'])
     test_data.sort(key=lambda x: x['idx'])
 
-    exp_dir = os.path.join(config.experiments, args.dataset,
-                    f"id_{exp_id}_train_{args.train}_test_{args.test}")
+    # MultiRC, ReCoRD preprocessing
+    if dataset == 'MultiRC':
+        preprocess_MultiRC(train_data)
+        preprocess_MultiRC(test_data)
+    elif dataset == 'ReCoRD':
+        preprocess_ReCoRD(train_data)
+        preprocess_ReCoRD(test_data)
 
-    summary = {
-        'created': str(datetime.now()),
-        'location': exp_dir,
-        'dataset': args.dataset,
-        'train': args.train,
-        'test': args.test,
-        'runs': {}
-    }
+    # format in-context examples
+    for ex in train_data:
+        ex['in_context'] = format_in_context(ex, dataset)
 
-    info = deepcopy(summary)
-    info['id'] = str(exp_id)
-    info['generations'] = {}
-    info['train_ids'] = [example['idx'] for example in train_data]
-    info['test_ids'] = [example['idx'] for example in test_data]
+    exp_dir = os.path.join(exp_dir, config.delim.join([str(x) for x in [exp_id, train, test]]))
+
+#   summary = {
+#       'created': str(datetime.now()),
+#       'location': exp_dir,
+#       'dataset': args.dataset,
+#       'train': args.train,
+#       'test': args.test,
+#       'generations' = {}
+#       'runs': {}
+#       'train_ids' = [example['idx'] for example in train_data]
+#       'test_ids' = [example['idx'] for example in test_data]
+#   }
 
     # write directories/files
     os.makedirs(exp_dir, exist_ok=True)
     write_jsonl(train_data, os.path.join(exp_dir, 'train.jsonl'))
     write_jsonl(test_data, os.path.join(exp_dir, 'test.jsonl'))
 
-    exp_summary_data[exp_id] = summary
-    write_json(exp_summary_data, exp_summary)
-    write_json(info, os.path.join(exp_dir, 'info.json'))
+#   write_json(summary, os.path.join(exp_dir, 'summary.json'))
 
-    # log if running with uuid
-    if args.uuid:
-        summary['uuid'] = args.uuid
-        summary['experiment_id'] = str(exp_id)
-        del summary['runs']
-        summary['status'] = 'prompt_generation'
-        write_json(summary,os.path.join(config.logs, f"{args.uuid}.json"))
-        
+#   # log if running with uuid
+#   if args.uuid:
+#       summary['uuid'] = args.uuid
+#       summary['experiment_id'] = str(exp_id)
+#       del summary['runs']
+#       summary['status'] = 'prompt_generation'
+#       write_json(summary,os.path.join(config.logs, f"{args.uuid}.json"))
+
 if __name__ == '__main__':
     main()
