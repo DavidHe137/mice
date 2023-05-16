@@ -1,6 +1,5 @@
 import sys
 sys.path.append("/coc/pskynet6/dhe83/mice/src")
-from utils import *
 import config
 
 def format_BoolQ(ex: dict)->str:
@@ -13,6 +12,7 @@ def format_BoolQ_in_context(ex: dict)->str:
 def format_general_few_shot(demonstrations, test, dataset):
     context = [ex['in_context'] for ex in demonstrations]
 
+    instructions = {}
     if dataset in instructions:
         context = [instructions[dataset], *context]
 

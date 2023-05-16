@@ -45,6 +45,26 @@ def write_json(d: dict, filepath: str) -> None:
     with open(filepath, "w") as f:
         json.dump(d, f, indent=4)
 
+def get_dir_with_id(parent, idx):
+    found= False
+    for d in os.listdir(parent):
+        if os.path.isdir(os.path.join(parent,d)):
+            i = int(d.split(config.delim)[0])
+            if i == idx:
+                found = True
+                child = os.path.join(parent,d)
+
+    assert found
+    return child
+
+def new_dir_id(parent):
+    idx = 1
+    for d in os.listdir(parent):
+        if os.path.isdir(os.path.join(parent,d)):
+            existing_idx = int(d.split(config.delim)[0])
+            idx = max(idx, existing_idx + 1)
+    return idx
+
 def get_experiment_info(experiment_id: str) -> dict():
     exp_summary = os.path.join(config.experiments, 'summary.json')
 
@@ -61,59 +81,6 @@ def get_experiment_info(experiment_id: str) -> dict():
 def get_log_with_uuid(uuid: str) -> dict():
     log_file = os.path.join(config.logs, f"{uuid}.json")
     return read_json(log_file)
-
-def format_example(example : dict, dataset: str, includeLabel=False) -> str:
-    superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']
-    assert dataset in superGLUE
-
-    def WSC(example:dict)->str:
-        text = example['text']
-        pronoun = example['target']['span2_text']
-        start = example['target']['span2_index']
-        end = start + len(pronoun)
-        assert pronoun == text[start:end]
-
-        passage = "".join([text[0:start],"*", text[start:end], "*", text[end:]])
-        return f"Final Exam with Answer Key\
-                            \nInstructions: Please carefully read the following passages. For each passage, you must identify which noun the pronoun marked in *bold* refers to.\
-                            \n=====\
-                            \nPassage: {passage}\
-                            \nQuestion: In the passage above, what does the pronoun \"*{pronoun}*\" refer to?\
-                            \nAnswer:"
-
-
-    templates = {
-            'BoolQ' : lambda ex: f"Context: {ex['passage']}\nQuestion: {ex['question']}\nAnswer:",
-        'CB' : lambda ex: f"{ex['premise']}\nQuestion: {ex['hypothesis']}. Frue, False, or Neither?",
-        'RTE' : lambda ex: f"{ex['premise']}\nQuestion: {ex['hypothesis']}. True or False?",
-        'WiC' : lambda ex: f"{ex['sentence1']}\n{ex['sentence2']}\nquestion: Is the word \'{ex['word']}\' used in the same sense in the two sentences above?",
-        'WSC' : lambda ex: f"Passage: {ex['text']}\nQuestions: In the passage above, does the pronoun \"{ex['target']['span2_text']}\" refer to {ex['target']['span1_text']}?\nAnswer:",
-        'COPA' : lambda ex: f"Premise: {ex['premise']}\nQuestion: What's the {ex['question']} of this?\nAlternative 1: {ex['choice1']}\nAlternative 2: {ex['choice2']}\nCorrect Alternative:",
-    }
-
-    text = templates[dataset](example)
-
-    if includeLabel:
-        if dataset == 'COPA':
-            text += f"{example['label'] + 1}\n" #NOTE: COPA labeling is weird
-        else:
-            text += f"{example['label']}\n"
-
-    return text
-
-def extract_prediction(output: str, dataset: str):
-    superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']
-    assert dataset in superGLUE
-
-    templates = {
-        'BoolQ' : lambda ex: ex.split("\n")[0],
-        'COPA' : lambda ex: ex.split("\n")[0],
-        'WSC' : lambda ex: ex.split("\n")[0],
-        'WiC' : lambda ex: ex.split("\n")[0],
-        'RTE' : lambda ex: ex.split("\n")[0],
-    }
-
-    return templates[dataset](output)
 
 def verbalize(pred: str, dataset: str):
     superGLUE = ['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC']

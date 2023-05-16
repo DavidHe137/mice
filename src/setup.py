@@ -47,14 +47,10 @@ def main():
     assert None not in [dataset, train, test]
 
 
-    exp_id = 1
     exp_dir = os.path.join(config.experiments, dataset)
     os.makedirs(exp_dir, exist_ok=True)
 
-    for experiment in os.listdir(exp_dir):
-        existing_id = int(experiment.split(config.delim)[0])
-        exp_id = max(exp_id, existing_id + 1)
-
+    exp_id = new_dir_id(exp_dir)
     # read data
     data_dir = os.path.join(config.data, args.dataset)
     train_data = read_jsonl(os.path.join(data_dir, 'train.jsonl'))
@@ -91,24 +87,20 @@ def main():
 
     exp_dir = os.path.join(exp_dir, config.delim.join([str(x) for x in [exp_id, train, test]]))
 
-#   summary = {
-#       'created': str(datetime.now()),
-#       'location': exp_dir,
-#       'dataset': args.dataset,
-#       'train': args.train,
-#       'test': args.test,
-#       'generations' = {}
-#       'runs': {}
-#       'train_ids' = [example['idx'] for example in train_data]
-#       'test_ids' = [example['idx'] for example in test_data]
-#   }
+    summary = {
+        'created': str(datetime.now()),
+        'dataset': args.dataset,
+        'train': args.train,
+        'test': args.test,
+        'train_ids': [example['idx'] for example in train_data],
+        'test_ids': [example['idx'] for example in test_data]
+    }
 
     # write directories/files
     os.makedirs(exp_dir, exist_ok=True)
     write_jsonl(train_data, os.path.join(exp_dir, 'train.jsonl'))
     write_jsonl(test_data, os.path.join(exp_dir, 'test.jsonl'))
-
-#   write_json(summary, os.path.join(exp_dir, 'summary.json'))
+    write_json(summary, os.path.join(exp_dir, 'summary.json'))
 
 #   # log if running with uuid
 #   if args.uuid:

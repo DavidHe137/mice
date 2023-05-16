@@ -23,6 +23,7 @@ from sentence_transformers import SentenceTransformer
 
 sys.path.append("/coc/pskynet6/dhe83/mice/src")
 from utils import *
+from prompts import *
 import config
 
 def similarity_scores(train_data, test_data, dataset, encoder_model):
@@ -102,17 +103,10 @@ def main():
 #   experiment_id = get_log_with_uuid(args.uuid)['experiment_id'] if args.uuid else args.experiment_id
 
 #   exp_info = get_experiment_info(experiment_id)
-    exp_dir = os.path.join(config.experiments, dataset)
-    found = False
-    for d in os.listdir(exp_dir):
-        idx = int(d.split(config.delim)[0])
-        if idx == exp_id:
-            found = True
-            exp_dir = os.path.join(exp_dir,d)
+    exp_dir = get_dir_with_id(os.path.join(config.experiments,dataset), exp_id)
 
-    assert found
-
-    generation_dir = os.path.join(exp_dir, f"{args.in_context}_{args.max_num_prompts}")
+    gen_id = new_dir_id(exp_dir)
+    generation_dir = os.path.join(exp_dir, config.delim.join([str(x) for x in [gen_id,in_context,max_num_prompts]]))
 
     train_data = read_jsonl(os.path.join(exp_dir, 'train.jsonl'))
     test_data = read_jsonl(os.path.join(exp_dir, 'test.jsonl'))
