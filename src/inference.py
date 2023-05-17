@@ -122,18 +122,17 @@ def predict_batch(
 
     return predictions
 
-batch_size = 16
 gen_len = 5
 
-def batch_inference(model, tokenizer, prompts):
+def batch_inference(model, tokenizer, prompts, batch_size):
     output_tokens = torch.empty(0, dtype=torch.int64).to('cuda:0')
 
     num_batches = ceil(len(prompts) / batch_size)
 
-    for batch in tqdm(range(num_batches)):
+    for batch in range(num_batches):
         start = batch * batch_size
         end = min((batch + 1) * batch_size, len(prompts))
-        print(start, end)
+
         # tokenize by batch to mitigate effect of long outliers
         tokens = tokenizer(prompts[start:end], padding=True, return_tensors="pt").to('cuda:0')
         outputs = model.generate(
@@ -265,9 +264,10 @@ def main():
 
     missed = []
     # make predictions
-    for test_id, example in test_examples.items():
+    for test_id, example in tqdm(test_examples.items()):
         try:
-            predictions_filepath = os.path.join(generation_dir, model_name, test_id)
+            predictions_folder= os.path.join(generation_dir, model_name, test_id)
+            predictions_filepath = os.path.join(predictions_folder, "predictions.json")
             predictions = {}
 
             if (not args.f) and os.path.exists(predictions_filepath):
@@ -284,15 +284,16 @@ def main():
                 predictions[key]['prompt'] = prompt
                 prompts.append(prompt)
 
-            model_outputs = batch_inference(model, tokenizer, prompts)
+            model_outputs = batch_inference(model, tokenizer, prompts, batch_size)
             for i, train_ids in enumerate(prompt_map[test_id]):
                 key = config.delim.join([str(x) for x in train_ids])
                 predictions[key]['output_text'] = model_outputs[i]
+                predictions[key]['prediction'] = verbalize(model_outputs[i], dataset)
 
+            os.makedirs(predictions_folder, exist_ok=True)
             # save outputs and monitor information
             with open(predictions_filepath, "w") as f:
                 json.dump(predictions, f, indent=4)
-            print("Finished example", test_id)
 
         except Exception as e:
             print(
@@ -300,6 +301,7 @@ def main():
             )
             print(e)
             missed.append(test_id)
+
     print("All finished.")
     if len(missed) > 0:
         print("Missed:", ", ".join([str(x) for x in missed]))

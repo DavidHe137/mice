@@ -56,11 +56,6 @@ def main():
     train_data = read_jsonl(os.path.join(data_dir, 'train.jsonl'))
     test_data = read_jsonl(os.path.join(data_dir, 'val.jsonl')) # NOTE: original datasets only have labels for validation
 
-    # Winograd preprocessing
-    if dataset == "Winograd":
-        train_data = [ex for ex in train_data if ex['label']]
-        test_data = [ex for ex in test_data if ex['label']]
-
     # sampling bounds
     train = min(len(train_data), train)
     test = min(len(test_data), test) if test > 0 else len(test_data)

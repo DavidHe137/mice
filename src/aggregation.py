@@ -18,15 +18,16 @@ from datetime import datetime
 
 import torch
 
-sys.path.append("/coc/pskynet6/dhe83/mice/src") 
+sys.path.append("/coc/pskynet6/dhe83/mice/src")
 from utils import *
+from prompts import *
 import config
 
 def produce_mention_probs(predictions: dict, gold_label: str, dataset: str) -> dict:
     # first produce all indicators
     all_counts = defaultdict(list)
     for prompt_id, v in predictions.items():
-        all_counts[verbalize(v['prediction'], dataset)].append(prompt_id)
+        all_counts[v['prediction']].append(prompt_id)
 
     # convert to list and sorted
     all_counts_lst = [(k, v) for k, v in all_counts.items()]
@@ -56,7 +57,7 @@ def compute_prompt_probs_similar(
     # first compute \sum_i s_i. Normalized by length of prompt_id
     all_prompt_scores = dict()
     for prompt_id in prompt_map:
-        prompt_str = str(tuple(prompt_id))
+        prompt_str = config.delim.join([str(x) for x in prompt_id])
         assert(prompt_str) in predictions
 
         all_prompt_scores[prompt_str] = sum(
@@ -122,35 +123,36 @@ def sampling(sampled_probs, prompt_probs, gold_label):
 
 def main():
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('experiment_id', type=str)
-    parser.add_argument('generation_id', type=str)
-    parser.add_argument('model', type=str.lower)
+    parser.add_argument('--dataset', choices=config.tasks)
+    parser.add_argument('--experiment_id', type=int)
+    parser.add_argument('--generation_id', type=int)
+    parser.add_argument('--model', type=str.lower)
     parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'majority-vote'], type=str)
-    parser.add_argument('--uuid', type=str)
+#   parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
+    dataset, exp_id, gen_id, model, method = args.dataset, args.experiment_id, args.generation_id, args.model, args.method
 
-    experiment_id = args.experiment_id
-    generation_id = args.generation_id
-    if args.uuid:
-        log_file = os.path.join(config.logs, f"{args.uuid}.json")
-        log = read_json(log_file)
-        log['last_modified'] = str(datetime.now())
-        log['status'] = "aggregation"
-        write_json(log, log_file)
+#   if args.uuid:
+#       log_file = os.path.join(config.logs, f"{args.uuid}.json")
+#       log = read_json(log_file)
+#       log['last_modified'] = str(datetime.now())
+#       log['status'] = "aggregation"
+#       write_json(log, log_file)
 
-        experiment_id = log['experiment_id']
-        generation_id = log['generation_id']
+#       experiment_id = log['experiment_id']
+#       generation_id = log['generation_id']
 
-    exp_info = get_experiment_info(experiment_id)
-    generation_dir = exp_info['generations'][generation_id]['location']        
+    exp_dir = get_dir_with_id(os.path.join(config.experiments, dataset), exp_id)
+    test_data = read_jsonl(os.path.join(exp_dir, 'test.jsonl'))
+
+    test_data = {ex["idx"]: ex for ex in test_data}
+
+    generation_dir = get_dir_with_id(exp_dir, gen_id)
 
     examples_dir = os.path.join(generation_dir, args.model)
     similarity_map = read_json(os.path.join(generation_dir, "similarity_scores.json"))
     prompt_map = read_json(os.path.join(generation_dir, "prompt_map.json"))
-
-    test_data = read_jsonl(os.path.join(exp_info['location'], 'test.jsonl'))  
-    test_data = {ex["idx"]: ex for ex in test_data}  
 
     # generate mention_counts
     predictions = dict()
@@ -179,11 +181,11 @@ def main():
 
         # produce raw mention probs (\mathbb{1}(m \in Y_{z,x}))
         gold_label = test_data[example_id]['label']
-        sampled_probs = produce_mention_probs(example_predictions, gold_label, exp_info['dataset'])
+        sampled_probs = produce_mention_probs(example_predictions, gold_label, dataset)
 
-        if args.method == "majority-vote": 
+        if args.method == "majority-vote":
             predictions[example_id] = {
-                "input_text": format_example(example, exp_info['dataset']),
+                "input_text": format_example(example, dataset),
                 "prediction": sampled_probs[0]['span'] if len(sampled_probs) > 0 else "",
                 "label": gold_label,
             }
@@ -209,7 +211,7 @@ def main():
         )
 
         predictions[example_id] = {
-            "input_text": format_example(example, exp_info['dataset']),
+            "input_text": format_example(example, dataset),
             "prediction": combined_probs[0]['span'] if len(combined_probs) > 0 else "",
             "label": gold_label,
         }
@@ -219,55 +221,51 @@ def main():
             os.path.join(example_dir, f"{args.method}_combined_probs.json")
         )
 
-    # output the predictions
-    predictions_filepath = os.path.join(generation_dir, args.model, f"{args.method}_predictions.json")
-    write_json(predictions, predictions_filepath)
-
-    print(args.method)
-    print("predictions", [p['prediction'] for p in predictions.values()])
-
-    if exp_info['dataset'] == 'RTE':
-        for k in predictions.keys():
-            predictions[k]['label'] = verbalize(predictions[k]['label'], exp_info['dataset'])
-            
-    print("references", [p['label'] for p in predictions.values()])
+#   print(args.method)
+#   print("predictions", [p['prediction'] for p in predictions.values()])
+#   print("references", [p['label'] for p in predictions.values()])
 
     correct = 0
     total = 0
     for p in predictions.values():
-        if p['prediction'] == p['label']:
+        if validate(p['prediction'],p['label'], dataset):
             correct+=1
         total+=1
 
     result = float(correct) / total
-    
-    run_id = len(exp_info['runs']) + 1
-    if args.uuid:
-        run_id = args.uuid
+    print(result)
 
-    run = {
-        'evaluated': str(datetime.now()),
-        'generation': exp_info['generations'][generation_id],
-        'model': args.model,
-        'method': args.method,
-        'result': result,
-        'failed_predictions': failed_predictions
-    }
+    predictions = {"accuracy": result, "predictions": predictions}
+    predictions_filepath = os.path.join(generation_dir, args.model, f"{args.method}_predictions.json")
+    write_json(predictions, predictions_filepath)
 
-    exp_summary = os.path.join(config.experiments, 'summary.json')
-    exp_summary_data = read_json(exp_summary)
-    exp_summary_data[experiment_id]['runs'][run_id] = run
-    write_json(exp_summary_data, exp_summary)
+#   run_id = len(exp_info['runs']) + 1
+#   if args.uuid:
+#       run_id = args.uuid
 
-    exp_info['runs'][run_id] = run
-    write_json(exp_info, os.path.join(exp_summary_data[experiment_id]['location'], 'info.json'))
+#   run = {
+#       'evaluated': str(datetime.now()),
+#       'generation': exp_info['generations'][generation_id],
+#       'model': args.model,
+#       'method': args.method,
+#       'result': result,
+#       'failed_predictions': failed_predictions
+#   }
 
-    if args.uuid:
-        log_file = os.path.join(config.logs, f"{args.uuid}.json")
-        log = read_json(log_file)
-        log['last_modified'] = str(datetime.now())
-        log['status'] = "finished"
-        write_json(log, log_file)
-    
+#   exp_summary = os.path.join(config.experiments, 'summary.json')
+#   exp_summary_data = read_json(exp_summary)
+#   exp_summary_data[experiment_id]['runs'][run_id] = run
+#   write_json(exp_summary_data, exp_summary)
+
+#   exp_info['runs'][run_id] = run
+#   write_json(exp_info, os.path.join(exp_summary_data[experiment_id]['location'], 'info.json'))
+
+#   if args.uuid:
+#       log_file = os.path.join(config.logs, f"{args.uuid}.json")
+#       log = read_json(log_file)
+#       log['last_modified'] = str(datetime.now())
+#       log['status'] = "finished"
+#       write_json(log, log_file)
+
 if __name__ == "__main__":
     main()
