@@ -222,8 +222,12 @@ def main():
         )
 
 #   print(args.method)
-#   print("predictions", [p['prediction'] for p in predictions.values()])
-#   print("references", [p['label'] for p in predictions.values()])
+    print("predictions", [p['prediction'] for p in predictions.values()])
+    print("references", [p['label'] for p in predictions.values()])
+
+    for k, v in predictions.items():
+        if validate(v['prediction'], v['label'], dataset):
+            print(v['prediction'], "|",  v['label'])
 
     correct = 0
     total = 0

@@ -92,17 +92,22 @@ def main():
     parser = argparse.ArgumentParser(description='Generate json dictionary consisting of test_idx: train_indices)')
     parser.add_argument('--dataset', choices=config.tasks)
     parser.add_argument('--experiment_id', type=int)
+
     parser.add_argument('--in_context', default=2, type=int)
     parser.add_argument('--max_num_prompts', default=1, type=int)
-#   parser.add_argument('--uuid', type=str)
+    parser.add_argument('--generation', default="random", type=str)
+
+    parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
-    dataset, exp_id, in_context, max_num_prompts = args.dataset, args.experiment_id, args.in_context, args.max_num_prompts
+
+    if args.uuid:
+        log = get_log_with_uuid(uuid)
+        dataset, exp_id, in_context, max_num_prompts = log.dataset, log.experiment_id, log.in_context, log.max_num_prompts
+    else:
+        dataset, exp_id, in_context, max_num_prompts = args.dataset, args.experiment_id, args.in_context, args.max_num_prompts
     assert None not in [dataset, exp_id, in_context, max_num_prompts]
 
-#   experiment_id = get_log_with_uuid(args.uuid)['experiment_id'] if args.uuid else args.experiment_id
-
-#   exp_info = get_experiment_info(experiment_id)
     exp_dir = get_dir_with_id(os.path.join(config.experiments,dataset), exp_id)
 
     gen_id = new_dir_id(exp_dir)
@@ -114,6 +119,8 @@ def main():
     similarity_map = similarity_scores(train_data, test_data, dataset, "all-roberta-large-v1")
     prompt_map = similar_generator(similarity_map, in_context, max_num_prompts)
 
+#   if max_num_prompts == 1:
+#       prompt_map = k_shot_baseline(in_context)
     os.makedirs(generation_dir, exist_ok=True)
 
     print("Writing similarity scores...", end="")
@@ -124,26 +131,12 @@ def main():
     write_json(prompt_map, os.path.join(generation_dir, 'prompt_map.json'))
     print("done!")
 
-#   print("Logging info...", end="")
-#   info = os.path.join(exp_info['location'], 'info.json')
-#   info_data = read_json(info)
-#   generation_id = max([int(id) for id in info_data['generations'].keys()], default=0) + 1
-#   info_data['generations'][generation_id] = {'created': str(datetime.now()),
-#                                               'location': generation_dir,
-#                                               'ordering': args.ordering,
-#                                               'in_context': args.in_context,
-#                                               'max_num_prompts': args.max_num_prompts,
-#                                               'encoder': args.encoder}
-#   write_json(info_data, info)
-#   print("done!")
-
-#   if args.uuid:
-#       log_file = os.path.join(config.logs, f"{args.uuid}.json")
-#       log = read_json(log_file)
-#       log['generation_id'] = str(generation_id)
-#       log['last_modified'] = str(datetime.now())
-#       log['status'] = "inference"
-#       write_json(log, log_file)
+    # log if running with uuid
+    if args.uuid:
+        log = get_log_with_uuid(args.uuid)
+        log.generation_id = str(gen_id)
+        log.status = 'inference'
+        write_json(log, os.path.join(config.logs, f"{args.uuid}.json"))
 
 if __name__ == '__main__':
     main()

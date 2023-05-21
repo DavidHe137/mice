@@ -13,7 +13,7 @@ import subprocess
 import argparse
 from uuid import uuid4
 
-sys.path.append("/coc/pskynet6/dhe83/mice/src") 
+sys.path.append("/coc/pskynet6/dhe83/mice/src")
 from utils import *
 import config
 
@@ -21,8 +21,8 @@ def parse():
     parser = argparse.ArgumentParser()
 
     #setup.py
-    parser.add_argument("--experiment_id", type=str)
-    parser.add_argument('--dataset', choices=['BoolQ', 'COPA', 'RTE', 'WiC', 'WSC'])
+    parser.add_argument("--experiment_id", type=int)
+    parser.add_argument('--dataset', choices=config.tasks)
     parser.add_argument('--train', type=int)
     parser.add_argument('--test', type=int)
 
@@ -30,7 +30,6 @@ def parse():
     parser.add_argument('--ordering', default='similar', choices=['similar', 'random', 'bayesian_noise'])
     parser.add_argument('--in_context', default=2, type=int)
     parser.add_argument('--max_num_prompts', default=1, type=int)
-    parser.add_argument('--encoder', default='all-roberta-large-v1', type=str)
 
     #inference.py
     parser.add_argument('--model', default="opt-125m", type=str)
@@ -39,7 +38,7 @@ def parse():
     parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'majority-vote'], type=str)
 
     args = parser.parse_args()
-    
+
     if args.experiment_id:
         run_existing(args)
     else:
@@ -55,11 +54,11 @@ def format_dependencies(jobs):
 
 def setup(dataset, train, test, uuid, dependencies = []):
     dependencies = format_dependencies(dependencies) if dependencies else ''
- 
+
     print("Calling setup.py...")
     command = f'''sbatch {dependencies} {config.src}/setup.py --dataset {dataset} --train {train} --test {test} --uuid {uuid}'''
     print(command)
-    setup = subprocess.run(command.split(), 
+    setup = subprocess.run(command.split(),
                             stdout=subprocess.PIPE, text=True, check=True)
     print(setup.stdout)
     return slurm_job_id(setup)
@@ -70,7 +69,7 @@ def prompt_generation(ordering, in_context, max_num_prompts, uuid, dependencies=
     print("Calling prompt_generation.py...")
     command = f'''sbatch {dependencies} {config.src}/prompt_generation.py 0 --ordering {ordering} --in_context {in_context} --max_num_prompts {max_num_prompts} --uuid {uuid}'''
     print(command)
-    prompt_generation = subprocess.run(command.split(), 
+    prompt_generation = subprocess.run(command.split(),
                             stdout=subprocess.PIPE, text=True, check=True)
     print(prompt_generation.stdout)
     return slurm_job_id(prompt_generation)
@@ -82,7 +81,7 @@ def inference(test, model, uuid, dependencies=[]) -> str:
     print("Queueing inference job array...")
     command = f'''sbatch {dependencies} --array=0-{test}:{config.tests_per_gpu} {config.src}/inference.py 0 0 {model} --uuid {uuid} '''
     print(command)
-    inference = subprocess.run(command.split(), 
+    inference = subprocess.run(command.split(),
                             stdout=subprocess.PIPE, text=True, check=True)
     print(inference.stdout)
     return slurm_job_id(inference)
@@ -93,30 +92,28 @@ def aggregation(model, method, uuid, dependencies=[]):
     print("Batching aggregation.py...")
     command = f'''sbatch {dependencies} {config.src}/aggregation.py 0 0 {model} --method {method} --uuid {uuid}'''
     print(command)
-    aggregation = subprocess.run(command.split(), 
+    aggregation = subprocess.run(command.split(),
                             stdout=subprocess.PIPE, text=True, check=True)
     print(aggregation.stdout)
     return slurm_job_id(aggregation)
 
-def run_existing(args):    
+def run_existing(args):
     uuid = str(uuid4())
     print("Run:", uuid)
-
-    exp_data = get_experiment_info(args.experiment_id)
 
     print("Existing experiment found:")
     print('Dataset', exp_data['dataset'])
     print('Train', exp_data['train'])
-    print('Test', exp_data['test']) 
+    print('Test', exp_data['test'])
 
-    test = exp_data['test']           
+    test = exp_data['test']
 
     #check if generation exists
     generation_id = None
     for k, v in exp_data['generations'].items():
-        if (v['ordering'] == args.ordering and 
-            v['in_context'] == args.in_context and 
-            v['max_num_prompts'] == args.max_num_prompts and 
+        if (v['ordering'] == args.ordering and
+            v['in_context'] == args.in_context and
+            v['max_num_prompts'] == args.max_num_prompts and
             v['encoder'] == args.encoder):
             generation_id = k
             break
@@ -142,7 +139,7 @@ def run_existing(args):
 
     else:
         print("Found predictions for", args.model)
-    
+
     aggregation(args.model, args.method, uuid, dependencies=dependencies)
     print("All jobs queued.")
 
@@ -157,14 +154,14 @@ def run_clean(args):
     # generate prompt_map.json
     generation_job = prompt_generation(args.ordering, args.in_context, args.max_num_prompts, uuid, dependencies=setup_job)
 
-    # run inference 
+    # run inference
     inference_job = inference(args.test, args.model, uuid, dependencies=generation_job)
 
     # aggregate, evaluate, report results
     aggregation(args.model, args.method, uuid, dependencies=inference_job)
 
     print("All jobs queued.")
-    
+
 
 if __name__ == "__main__":
     os.makedirs(config.experiments, exist_ok=True)

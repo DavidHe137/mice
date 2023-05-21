@@ -14,7 +14,8 @@ import os
 import sys
 import json
 import argparse
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from peft import PeftModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer, LlamaForCausalLM
 from tqdm import tqdm
 from math import ceil
 
@@ -28,10 +29,10 @@ from typing import Tuple
 import sys
 import torch
 import time
-from fairscale.nn.model_parallel.initialize import initialize_model_parallel
+# from fairscale.nn.model_parallel.initialize import initialize_model_parallel
 
-sys.path.append(config.llama)
-from llama import ModelArgs, Transformer, Tokenizer, LLaMA
+#sys.path.append(config.llama)
+# from llama import ModelArgs, Transformer, Tokenizer, LLaMA
 
 def setup_model_parallel() -> Tuple[int, int]:
     local_rank = int(os.environ.get("LOCAL_RANK", -1))
@@ -45,39 +46,39 @@ def setup_model_parallel() -> Tuple[int, int]:
     torch.manual_seed(1)
     return local_rank, world_size
 
-def load_llama(
-    ckpt_dir: str,
-    local_rank: int,
-    world_size: int,
-    max_seq_len: int,
-    max_batch_size: int
-) -> LLaMA:
-    tokenizer_path = os.path.join(config.llama, "checkpoints",  "tokenizer.model")
+#   def load_llama(
+#       ckpt_dir: str,
+#       local_rank: int,
+#       world_size: int,
+#       max_seq_len: int,
+#       max_batch_size: int
+#   ) -> LLaMA:
+#       tokenizer_path = os.path.join(config.llama, "checkpoints",  "tokenizer.model")
 
-    start_time = time.time()
-    checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-    assert world_size == len(
-        checkpoints
-    ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {world_size}"
-    ckpt_path = checkpoints[local_rank]
-    print("Loading")
-    checkpoint = torch.load(ckpt_path, map_location="cpu")
-    with open(Path(ckpt_dir) / "params.json", "r") as f:
-        params = json.loads(f.read())
+#       start_time = time.time()
+#       checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
+#       assert world_size == len(
+#           checkpoints
+#       ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {world_size}"
+#       ckpt_path = checkpoints[local_rank]
+#       print("Loading")
+#       checkpoint = torch.load(ckpt_path, map_location="cpu")
+#       with open(Path(ckpt_dir) / "params.json", "r") as f:
+#           params = json.loads(f.read())
 
-    model_args: ModelArgs = ModelArgs(
-        max_seq_len=max_seq_len, max_batch_size=max_batch_size, **params
-    )
-    tokenizer = Tokenizer(model_path=tokenizer_path)
-    model_args.vocab_size = tokenizer.n_words
-    torch.set_default_tensor_type(torch.cuda.HalfTensor)
-    model = Transformer(model_args)
-    torch.set_default_tensor_type(torch.FloatTensor)
-    model.load_state_dict(checkpoint, strict=False)
+#       model_args: ModelArgs = ModelArgs(
+#           max_seq_len=max_seq_len, max_batch_size=max_batch_size, **params
+#       )
+#       tokenizer = Tokenizer(model_path=tokenizer_path)
+#       model_args.vocab_size = tokenizer.n_words
+#       torch.set_default_tensor_type(torch.cuda.HalfTensor)
+#       model = Transformer(model_args)
+#       torch.set_default_tensor_type(torch.FloatTensor)
+#       model.load_state_dict(checkpoint, strict=False)
 
-    generator = LLaMA(model, tokenizer)
-    print(f"Loaded in {time.time() - start_time:.2f} seconds")
-    return generator
+#       generator = LLaMA(model, tokenizer)
+#       print(f"Loaded in {time.time() - start_time:.2f} seconds")
+#       return generator
 
 def predict_batch(
     tokenizer,
@@ -122,49 +123,47 @@ def predict_batch(
 
     return predictions
 
-gen_len = 5
-
-def batch_inference(model, tokenizer, prompts, batch_size):
+def batch_inference(model, tokenizer, prompts, batch_size, mask_bos):
     output_tokens = torch.empty(0, dtype=torch.int64).to('cuda:0')
-
+    first_token_scores = []
     num_batches = ceil(len(prompts) / batch_size)
 
     for batch in range(num_batches):
         start = batch * batch_size
         end = min((batch + 1) * batch_size, len(prompts))
 
+        gen_len=5
         # tokenize by batch to mitigate effect of long outliers
         tokens = tokenizer(prompts[start:end], padding=True, return_tensors="pt").to('cuda:0')
-        outputs = model.generate(
-            tokens.input_ids,
-            attention_mask=tokens.attention_mask,
-            max_new_tokens=gen_len,
-            temperature=0,
-            return_dict_in_generate=True,
-            output_scores=True,
-            eos_token_id=198,  # special character 'ċ' (bytecode for new line?) NOTE use this for generation
-        )
-        output_tokens = torch.cat((output_tokens, outputs.sequences[:, -gen_len:]))
+        attention_mask = masked_bos(tokens.attention_mask) if mask_bos else tokens.attention_mask
 
+        with torch.no_grad():
+            outputs = model.generate(
+                input_ids=tokens.input_ids,
+                attention_mask=attention_mask,
+                max_new_tokens=gen_len,
+                temperature=0,
+                return_dict_in_generate=True,
+                output_scores=True,
+            )
+        output_tokens = torch.cat((output_tokens, outputs.sequences[:, -gen_len:]))
     output_text = tokenizer.batch_decode(output_tokens)
     return output_text
 
-def batch_scoring(model, prompts):
+def batch_scoring(model, tokenizer, prompts, batch_size, mask_bos):
     log_probs = torch.empty(0, dtype=torch.float32).to('cpu:0')
 
-    ids, prompts = zip(*prompt_map.items())
-
-    num_batches = round(len(prompts) / batch_size + 0.5)
+    num_batches = ceil(len(prompts) / batch_size)
     with torch.no_grad():
-        for batch in tqdm(range(num_batches)):
+        for batch in range(num_batches):
             start = batch * batch_size
             end = min((batch + 1) * batch_size, len(prompts))
 
             # tokenize by batch to mitigate effect of long outliers
             tokens = tokenizer(prompts[start:end], padding=True, return_tensors="pt").to('cuda:0')
-
-            logits = model(tokens.input_ids, attention_mask=tokens.attention_mask).logits
-            labels_attention_mask = tokens.attention_mask.unsqueeze(-1)
+            attention_mask = masked_bos(tokens.attention_mask) if mask_bos else tokens.attention_mask
+            logits = model(tokens.input_ids, attention_mask).logits
+            labels_attention_mask = attention_mask.unsqueeze(-1)
             masked_log_probs = labels_attention_mask.float() * torch.log_softmax(
                 logits.float(), dim=-1
             )
@@ -177,13 +176,19 @@ def batch_scoring(model, prompts):
             log_probs = torch.cat((log_probs, seq_log_prob))
 
     return log_probs
+
+def masked_bos(a: torch.Tensor)->torch.Tensor:
+    a[:, -1] = 0
+    return torch.roll(a, shifts=1, dims=-1)
+
 def main():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--experiment_id', type=int)
     parser.add_argument('--dataset', choices=config.tasks)
     parser.add_argument('--generation_id', type=int)
     parser.add_argument('--model', type=str.lower)
-    parser.add_argument('--test_ids', type=int, nargs='+')
+    parser.add_argument('--test-ids', type=int, nargs='+')
+    parser.add_argument('-mask-bos', action='store_true')
     parser.add_argument('-f', action='store_true')
 
 #   parser.add_argument('--uuid', type=str)
@@ -219,9 +224,13 @@ def main():
               "opt-1.3b": "facebook/opt-1.3B",
               "opt-2.7b": "facebook/opt-2.7B",
               "opt-6.7b": "facebook/opt-6.7B",
-              "llama-7b": "7B"}
+              "llama-7b": "decapoda-research/llama-7b-hf",
+              "alpaca-7b": "decapoda-research/llama-7b-hf"}
+
+    lora_weights = {"alpaca-7b": "tloen/alpaca-lora-7b"}
 
     model_name = args.model
+    model_addr = models[model_name]
     max_context_len = 2048
 
     batch_sizes = {"opt-125m": 64,
@@ -229,32 +238,46 @@ def main():
               "opt-1.3b": 16,
               "opt-2.7b": 8,
               "opt-6.7b": 4,
-              "llama-7b": 4}
+              "llama-7b": 4,
+              "alpaca-7b": 4}
     batch_size = batch_sizes[args.model]
 
     print(f"Load {args.model}...", end="")
     model = None
-    if "llama" in model_name:
-        #TODO: optimize llama inference
-        max_seq_len = 1024
-        max_batch_size = 32
+    tokenizer = AutoTokenizer.from_pretrained(model_addr, use_fast=False, padding_side='left')
+    if "llama" in model_name or "alpaca" in model_name:
+        model = LlamaForCausalLM.from_pretrained(
+            model_addr,
+            torch_dtype=torch.float16,
+            device_map='auto'
+        ).cuda()
+        if model_name in lora_weights:
+            model = PeftModel.from_pretrained(
+                model,
+                lora_weights[model_name],
+                torch_dtype=torch.float16,
+            )
+            args.mask_bos=True
+        # unwind broken decapoda-research config
+        model.config.pad_token_id = tokenizer.pad_token_id = 0  # unk
+        model.config.bos_token_id = 1
+        model.config.eos_token_id = 2
 
-        ckpt_dir = os.path.join(config.llama, "checkpoints", model_name)
-
-        local_rank, world_size = setup_model_parallel()
-        if local_rank > 0:
-            sys.stdout = open(os.devnull, "w")
-
-        model = load_llama(
-            ckpt_dir, local_rank, world_size, max_seq_len, max_batch_size
-        )
+        model.half()
+        model.eval()
+        if torch.__version__ >= "2" and sys.platform != "win32":
+            model = torch.compile(model)
     else:
-        tokenizer = AutoTokenizer.from_pretrained(models[model_name], use_fast=False, padding_side='left')
-        model = AutoModelForCausalLM.from_pretrained(models[model_name]).cuda()
+        model = AutoModelForCausalLM.from_pretrained(model_addr).cuda()
     print("done!")
 
+
     generation_dir = get_dir_with_id(exp_dir, gen_id)
-    os.makedirs(os.path.join(generation_dir, model_name), exist_ok=True)
+    model_dir = os.path.join(generation_dir, model_name)
+    if args.mask_bos:
+        model_dir = os.path.join(generation_dir, f"{model_name}_masked_bos")
+    os.makedirs(model_dir, exist_ok=True)
+
 
     print("Get prompt_map...", end="")
     prompt_map_filepath = os.path.join(generation_dir, "prompt_map.json")
@@ -262,18 +285,20 @@ def main():
         prompt_map = json.load(f)
     print("done!")
 
+
     missed = []
     # make predictions
     for test_id, example in tqdm(test_examples.items()):
-        try:
-            predictions_folder= os.path.join(generation_dir, model_name, test_id)
-            predictions_filepath = os.path.join(predictions_folder, "predictions.json")
-            predictions = {}
+#       try:
+        predictions_folder= os.path.join(model_dir, test_id)
+        predictions_filepath = os.path.join(predictions_folder, "predictions.json")
+        predictions = {}
 
-            if (not args.f) and os.path.exists(predictions_filepath):
-                print(f"Example {test_id} already has predictions")
-                continue
+        if (not args.f) and os.path.exists(predictions_filepath):
+            print(f"Example {test_id} already has predictions")
+            continue
 
+        if dataset in ["BoolQ", "CB", "RTE", "WiC", "WSC", "Winograd"]:
             prompts = []
             for train_ids in prompt_map[test_id]:
                 key = config.delim.join([str(x) for x in train_ids])
@@ -284,23 +309,47 @@ def main():
                 predictions[key]['prompt'] = prompt
                 prompts.append(prompt)
 
-            model_outputs = batch_inference(model, tokenizer, prompts, batch_size)
+            model_outputs = batch_inference(model, tokenizer, prompts, batch_size, args.mask_bos)
             for i, train_ids in enumerate(prompt_map[test_id]):
                 key = config.delim.join([str(x) for x in train_ids])
                 predictions[key]['output_text'] = model_outputs[i]
                 predictions[key]['prediction'] = verbalize(model_outputs[i], dataset)
 
-            os.makedirs(predictions_folder, exist_ok=True)
-            # save outputs and monitor information
-            with open(predictions_filepath, "w") as f:
-                json.dump(predictions, f, indent=4)
+        else:
+            p_map = {}
+            for train_ids in prompt_map[test_id]:
+                key = config.delim.join([str(x) for x in train_ids])
+                predictions[key] = {}
 
-        except Exception as e:
-            print(
-                f"Example {test_id} has some problem."
-            )
-            print(e)
-            missed.append(test_id)
+                prompt = format_few_shot([train_data[idx] for idx in train_ids], example, dataset)
+                predictions[key]['prompt'] = prompt
+                choices = format_few_shot_choices([train_data[idx] for idx in train_ids], example, dataset)
+
+                choices = {config.delim.join([key, label]): choice for label, choice in choices.items()}
+                p_map.update(choices)
+
+            idxs, prompts = zip(*p_map.items())
+            probs = batch_scoring(model, tokenizer, prompts, batch_size, args.mask_bos)
+            results = pack(idxs, probs, dataset)
+            choices = verbalize(results, dataset)
+
+            for train_ids in prompt_map[test_id]:
+                key = config.delim.join([str(x) for x in train_ids])
+                predictions[key]["log_probs"] = results[key]
+                predictions[key]["prediction"] = choices[key]
+
+
+        os.makedirs(predictions_folder, exist_ok=True)
+        # save outputs and monitor information
+        with open(predictions_filepath, "w") as f:
+            json.dump(predictions, f, indent=4)
+
+#       except Exception as e:
+#       print(
+#           f"Example {test_id} has some problem."
+#       )
+#       print(e)
+#       missed.append(test_id)
 
     print("All finished.")
     if len(missed) > 0:

@@ -65,6 +65,9 @@ def new_dir_id(parent):
             idx = max(idx, existing_idx + 1)
     return idx
 
+def get_log_with_uuid(uuid):
+    return read_json(os.path.join(config.logs, f"{uuid}.json"))
+
 def get_experiment_info(experiment_id: str) -> dict():
     exp_summary = os.path.join(config.experiments, 'summary.json')
 

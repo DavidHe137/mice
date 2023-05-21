@@ -57,7 +57,47 @@ def format_Winograd(ex:dict)->str:
              f"\nQuestion: In the passage above, what does the pronoun \"*{pronoun}*\" refer to?\nAnswer:")
 
 def format_Winograd_in_context(ex:dict)->str:
-    return " ".join([format_WSC(ex), ex['target']['span1_text']])
+    return " ".join([format_Winograd(ex), ex['target']['span1_text']])
+
+def format_COPA(ex: dict)->str():
+    substitutions = {"cause": "because", "effect": "so"}
+    return f"{ex['premise'][:-1]} {substitutions[ex['question']]}"
+
+def format_COPA_in_context(ex: dict)->str:
+    label = ex['choice1'] if ex['label'] == 0 else ex['choice2']
+    return " ".join([format_COPA(ex), label.lower()])
+
+def COPA_choices(ex: dict)->list(str()):
+    return [" ".join([format_COPA(ex), x.lower()]) for x in [ex['choice1'], ex['choice2']]]
+
+def format_COPA_few_shot(demonstrations, test):
+    context = "\n".join([format_COPA_in_context(ex) for ex in demonstrations])
+    prompt = format_COPA(test)
+    prompt = "\n".join([context, prompt])
+    return prompt
+
+def format_COPA_few_shot_choices(demonstrations, test):
+    context = "\n".join([format_COPA_in_context(ex) for ex in demonstrations])
+    prompts = COPA_choices(test)
+    prompts = {str(i): ("\n".join([context, prompt])) for i, prompt in enumerate(prompts)}
+    return prompts
+
+def pack_COPA(ids, probs):
+    results = {}
+    for i, prob in enumerate(probs):
+        key = ids[i]
+        label = int(key.split(config.delim)[-1])
+        dem_key = config.delim.join(key.split(config.delim)[0:-1])
+        if dem_key not in results:
+            results[dem_key] = {}
+        results[dem_key][label] = prob.item()
+    return results
+
+def verbalize_COPA(results):
+    choices = {}
+    for k, v in results.items():
+        choices[k] = max(v, key=v.get)
+    return choices
 
 def format_general_few_shot(demonstrations, test, dataset):
     context = [ex['in_context'] for ex in demonstrations]
@@ -75,6 +115,7 @@ def format_example(ex : dict, dataset: str):
 
     templates = {"BoolQ": format_BoolQ,
                 "CB": format_CB,
+                "COPA": format_COPA,
                 "RTE": format_RTE,
                 "WiC": format_WiC,
                 "WSC": format_WSC,
@@ -87,6 +128,7 @@ def format_in_context(ex : dict, dataset: str)->str:
 
     templates = {"BoolQ": format_BoolQ_in_context,
                 "CB": format_CB_in_context,
+                "COPA": format_COPA_in_context,
                 "RTE": format_RTE_in_context,
                 "WiC": format_WiC_in_context,
                 "WSC": format_WSC_in_context,
@@ -99,12 +141,16 @@ def format_few_shot(demonstrations, test, dataset):
 
     templates = {"BoolQ": format_general_few_shot,
                 "CB": format_general_few_shot,
+                "COPA": format_COPA_few_shot,
                 "RTE": format_general_few_shot,
                 "WiC": format_general_few_shot,
                 "WSC": format_general_few_shot,
                 "Winograd": format_general_few_shot}
 
-    return templates[dataset](demonstrations, test, dataset)
+    if dataset in ["COPA"]:
+        return templates[dataset](demonstrations, test)
+    else:
+        return templates[dataset](demonstrations, test, dataset)
 
 def first_word(s):
         return "".join([c for c in re.split(" |\n|</s>",s.strip())[0] if str.isalpha(c)]).lower()
@@ -148,6 +194,7 @@ def verbalize(text : dict, dataset: str):
 
     templates = {"BoolQ": verbalize_TrueFalse,
                  "CB": verbalize_CB,
+                 "COPA": verbalize_COPA,
                 "RTE": verbalize_RTE,
                 "WiC": verbalize_TrueFalse,
                 "WSC": verbalize_TrueFalse,
@@ -159,9 +206,11 @@ def validate(pred, label, dataset):
     assert dataset in config.tasks
 
     equality = lambda pred, label: pred == label
-    winograd = lambda pred, label: label in pred or label in pred or common_words(pred, label) >= len(label.split(" ")) / 2
+    winograd = lambda pred, label: label.lower() in pred or label.lower() in pred or common_words(pred, label.lower()) >= len(label.split(" ")) / 2
+#   winograd = lambda pred, label: pred.lower() == label.lower()
     templates = {"BoolQ": equality,
              "CB": equality,
+             "COPA": equality,
             "RTE": equality,
             "WiC": equality,
             "WSC": equality,
@@ -169,3 +218,17 @@ def validate(pred, label, dataset):
 
     return templates[dataset](pred, label)
 
+
+def pack(ids, probs, dataset):
+    assert dataset in config.tasks
+
+    templates = {"COPA": pack_COPA}
+
+    return templates[dataset](ids, probs)
+
+def format_few_shot_choices(demonstrations, test, dataset):
+    assert dataset in config.tasks
+
+    templates = {"COPA": format_COPA_few_shot_choices}
+
+    return templates[dataset](demonstrations,test)
