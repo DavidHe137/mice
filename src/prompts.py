@@ -2,6 +2,7 @@ import sys
 sys.path.append("/coc/pskynet6/dhe83/mice/src")
 import config
 import re
+import torch
 
 def format_BoolQ(ex: dict)->str:
     return f"{ex['passage']}\nquestion: {ex['question']}\nanswer:"
@@ -232,3 +233,15 @@ def format_few_shot_choices(demonstrations, test, dataset):
     templates = {"COPA": format_COPA_few_shot_choices}
 
     return templates[dataset](demonstrations,test)
+
+def first_token_probs(scores, dataset):
+    assert dataset in config.tasks
+
+    true_tokens = [3869, 4874, 5852, 1565]
+    false_tokens = [1939, 694, 7700, 2089]
+
+    probs = scores.log_softmax(-1).exp()
+    true_prob = probs[true_tokens].sum(-1).item()
+    false_prob = probs[false_tokens].sum(-1).item()
+
+    return {"True": true_prob, "False": false_prob}

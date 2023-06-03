@@ -23,13 +23,16 @@ from utils import *
 from prompts import *
 import config
 
-def produce_mention_probs(predictions: dict, gold_label: str, dataset: str) -> dict:
-    # first produce all indicators
+def produce_mention_probs(predictions: dict, gold_label: str) -> dict:
+    '''
+    Counts the number of prompts in an ensemble that generates an answer span
+    '''
+    # all_counts = {"span": list(prompt_ids)}
     all_counts = defaultdict(list)
     for prompt_id, v in predictions.items():
         all_counts[v['prediction']].append(prompt_id)
 
-    # convert to list and sorted
+    # sort by number of prompts, descending
     all_counts_lst = [(k, v) for k, v in all_counts.items()]
     all_counts_lst = sorted(all_counts_lst, key=lambda x: len(x[1]), reverse=True)
 
@@ -50,28 +53,28 @@ def produce_mention_probs(predictions: dict, gold_label: str, dataset: str) -> d
 def compute_prompt_probs_similar(
     predictions: dict, prompt_map: list, similarity_lst: list
 ) -> dict:
-
+    '''
+    For an implied test example, calculates normalized similarity_score weighting for each prompt
+    '''
     # first convert similarity_lst to dict mapping id to score
     similarity_dict = dict(similarity_lst)
 
-    # first compute \sum_i s_i. Normalized by length of prompt_id
     all_prompt_scores = dict()
     for prompt_id in prompt_map:
-        prompt_str = config.delim.join([str(x) for x in prompt_id])
-        assert(prompt_str) in predictions
+        assert(prompt_id) in predictions
 
-        all_prompt_scores[prompt_str] = sum(
-            [similarity_dict[train_id] for train_id in prompt_id]
-        ) / len(prompt_id)
+        all_prompt_scores[prompt_id] = sum(
+           [similarity_dict[train_id] for train_id in prompt_id.split(delim)]
+        ) / len(prompt_ids.split(delim))
 
     # then get the list of prompt scores. Technically this step is unnecessary,
     # but put here for sanity check
     prompt_ids = list(predictions.keys())
     prompt_scores = [all_prompt_scores[prompt_id] for prompt_id in prompt_ids]
 
-    # softmax to get the probabilities
-
-    prompt_probs = torch.tensor(prompt_scores).softmax(dim=-1)
+    # softmax temperature
+    prompt_scores = torch.tensor(prompt_scores) / temperature
+    prompt_probs = prompt_scores.softmax(dim=-1)
 
     # map it back to a dictionary
     prompt_probs = {
@@ -84,7 +87,7 @@ def compute_and_save_priors(
     example_dir, example_predictions, prompt_map, similarity_lst
 ):
     # check if file already exists
-    priors_filepath = os.path.join(example_dir, "similar_priors.json")
+    priors_filepath = os.path.join(example_dir, f"similar_priors_{temperature}.json")
     if os.path.exists(priors_filepath):
         priors = read_json(priors_filepath)
     else:
@@ -94,6 +97,33 @@ def compute_and_save_priors(
         write_json(priors, priors_filepath)
 
     return priors
+
+def confidence(sampled_probs, prompt_probs, gold_label):
+    # Compute P(y|Z) from all the Indicator(m \in Z_i) and P(Z_i), for all i
+    # NOTE: This is the crux computation-- all others are flowery
+    all_probs = defaultdict(float)
+    for mention_d in sampled_probs:
+        all_probs[mention_d["span"]] = sum(
+            [prompt_probs[prompt] for prompt in mention_d["prompts"]]
+        )
+
+    # convert to list and sorted
+    all_probs_lst = [(k, v) for k, v in all_probs.items()]
+    all_probs_lst = sorted(all_probs_lst, key=lambda x: x[1], reverse=True)
+
+    # convert to dict
+    new_all_probs_lst = []
+    for (k, v) in all_probs_lst:
+        new_all_probs_lst.append(
+            {
+                "span": k,
+                "prob": v,
+                "is_gold": k is gold_label,
+            }
+        )
+
+    return new_all_probs_lst
+
 
 def sampling(sampled_probs, prompt_probs, gold_label):
     # Compute P(y|Z) from all the Indicator(m \in Z_i) and P(Z_i), for all i
@@ -127,11 +157,12 @@ def main():
     parser.add_argument('--experiment_id', type=int)
     parser.add_argument('--generation_id', type=int)
     parser.add_argument('--model', type=str.lower)
-    parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'majority-vote'], type=str)
+    parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'majority-vote', 'confidence'], type=str)
+    parser.add_argument('--temperature', default=1.0, type=float)
 #   parser.add_argument('--uuid', type=str)
 
     args = parser.parse_args()
-    dataset, exp_id, gen_id, model, method = args.dataset, args.experiment_id, args.generation_id, args.model, args.method
+    dataset, exp_id, gen_id, model, method, temperature = args.dataset, args.experiment_id, args.generation_id, args.model, args.method, args.temperature
 
 #   if args.uuid:
 #       log_file = os.path.join(config.logs, f"{args.uuid}.json")
@@ -187,6 +218,7 @@ def main():
             predictions[example_id] = {
                 "input_text": format_example(example, dataset),
                 "prediction": sampled_probs[0]['span'] if len(sampled_probs) > 0 else "",
+                "num_prompts": sampled_probs[0]['num_prompts'] if len(sampled_probs) > 0 else "",
                 "label": gold_label,
             }
             continue

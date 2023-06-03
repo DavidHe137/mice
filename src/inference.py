@@ -125,7 +125,8 @@ def predict_batch(
 
 def batch_inference(model, tokenizer, prompts, batch_size, mask_bos):
     output_tokens = torch.empty(0, dtype=torch.int64).to('cuda:0')
-    first_token_scores = []
+    first_token_scores = torch.empty(0, dtype=torch.float16).to('cuda:0')
+
     num_batches = ceil(len(prompts) / batch_size)
 
     for batch in range(num_batches):
@@ -147,8 +148,9 @@ def batch_inference(model, tokenizer, prompts, batch_size, mask_bos):
                 output_scores=True,
             )
         output_tokens = torch.cat((output_tokens, outputs.sequences[:, -gen_len:]))
-    output_text = tokenizer.batch_decode(output_tokens)
-    return output_text
+        first_token_scores = torch.cat((first_token_scores, outputs.scores[0]))
+
+    return output_tokens, first_token_scores
 
 def batch_scoring(model, tokenizer, prompts, batch_size, mask_bos):
     log_probs = torch.empty(0, dtype=torch.float32).to('cpu:0')
@@ -309,11 +311,14 @@ def main():
                 predictions[key]['prompt'] = prompt
                 prompts.append(prompt)
 
-            model_outputs = batch_inference(model, tokenizer, prompts, batch_size, args.mask_bos)
+            output_sequences, output_scores = batch_inference(model, tokenizer, prompts, batch_size, args.mask_bos)
+            output_text = tokenizer.batch_decode(output_sequences)
+
             for i, train_ids in enumerate(prompt_map[test_id]):
                 key = config.delim.join([str(x) for x in train_ids])
-                predictions[key]['output_text'] = model_outputs[i]
-                predictions[key]['prediction'] = verbalize(model_outputs[i], dataset)
+                predictions[key]['output_text'] = output_text[i]
+                predictions[key]['probs'] = first_token_probs(output_scores[i], dataset)
+                predictions[key]['prediction'] = verbalize(output_text[i], dataset)
 
         else:
             p_map = {}
