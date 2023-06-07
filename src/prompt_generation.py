@@ -16,11 +16,13 @@ import argparse
 from collections import defaultdict
 from datetime import datetime
 import random
-from itertools import product
+from itertools import combinations
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
 from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer
 
 sys.path.append("/coc/pskynet6/dhe83/mice/src")
 from utils import *
@@ -55,40 +57,6 @@ def similarity_scores(train_data, test_data, dataset, encoder_model):
 
     return similarity_map
 
-def similar_generator(similarity_map: dict, in_context: int, max_num_prompts: int) -> dict(list()):
-    prompt_map = {}
-    for test_idx in similarity_map:
-        #TODO: generalize for k in_context
-
-        # then extract the top-sqrt(num_prompts) from similarity and generate all pairs
-        t = int(sqrt(max_num_prompts))
-
-        # special case for t=1: select the top-2 similar and put into a single prompt
-        if t == 1:
-            top_2 = list(map(lambda x: x[0], similarity_map[test_idx][:2]))
-            prompt_map[test_idx] = [(top_2[0], top_2[1])]
-        else:
-            top_t = list(map(lambda x: x[0], similarity_map[test_idx][:t]))
-            prompt_map[test_idx] = [(ex1, ex2) for ex1 in top_t for ex2 in top_t]
-
-    return prompt_map
-
-def random_generator(train_data, test_data, in_context: int, max_num_prompts: int) -> dict(list()):
-    prompt_map =
-    train_indices = [train_example['idx'] for train_example in train_data]
-    train_idx_pairs = [(ex1, ex2) for ex1 in train_indices for ex2 in train_indices]
-    num_prompts = max(len(train_idx_pairs, max_num_prompts))
-
-    #TODO: generalize for k in_context
-    for test_example in test_data:
-        prompt_map[test_example['idx']] = random.sample(train_idx_pairs, num_prompts)
-
-    return prompt_map
-
-def bayesian_noise_reduction(in_context: int, max_num_prompts: int, model_name: str) -> dict(list()):
-    #TODO: do this
-    print("hi")
-
 def most_similar(id_combinations: dict, similarity_map: dict, num_prompts: int) -> dict(list()):
     prompt_map = defaultdict(list)
 
@@ -107,6 +75,21 @@ def order_prompts(prompt_map: dict(list()), similarity_map: dict(list()), descen
 
     return prompt_map
 
+def truncate(prompt_map: dict(list(list())), train_data: list(dict()), test_data: list(dict()), dataset:str):
+    train_prompts = {ex["idx"]: format_in_context(ex, dataset) for ex in train_data}
+    test_prompts = {ex["idx"]: format_example(ex, dataset) for ex in test_data}
+
+    tokenizer = AutoTokenizer.from_pretrained("decapoda-research/llama-7b-hf", use_fast=False)
+
+    print("Truncating Prompts...", end="")
+    for test_id, prompt_list in tqdm(prompt_map.items()):
+        test_prompt = test_prompts[test_id]
+        for i, prompt_ids in enumerate(prompt_list):
+            start = 0
+            while tokenizer("\n\n".join([*[train_prompts[x] for x in prompt_ids[start:]], test_prompt]), return_tensors="pt").input_ids.shape[1] > 2000:
+                start+=1
+            prompt_list[i] = prompt_ids[start:]
+    print("done!")
 
 def main():
     parser = argparse.ArgumentParser(description='Generate json dictionary consisting of test_idx: train_indices)')
@@ -136,13 +119,14 @@ def main():
     train_data = read_jsonl(os.path.join(exp_dir, 'train.jsonl'))
     test_data = read_jsonl(os.path.join(exp_dir, 'test.jsonl'))
 
+    in_context = max(in_context, len(train_data))
 
     prompt_map = {}
     similarity_map = similarity_scores(train_data, test_data, dataset, "all-roberta-large-v1")
     demonstration_ids = [ex["idx"] for ex in train_data]
 
     if max_num_prompts > 1:
-        id_combinations = list([list(x) for x in product(demonstration_ids, repeat=in_context)])
+        id_combinations = list([list(x) for x in combinations(demonstration_ids, in_context)])
 
         if strategy == "random":
             id_combinations = random.sample(id_combinations, k=max_num_prompts) if max_num_prompts < len(id_combinations) else id_combinations
@@ -160,12 +144,16 @@ def main():
             for test_id, train_similarity in similarity_map.items():
                 similarity_dict = {t[0]: t[1] for t in train_similarity}
                 demonstration_ids.sort(reverse=True, key=lambda x: similarity_dict[x])
-                prompt_map = demonstration_ids[:in_context]
+                prompt_map[test_id] = [demonstration_ids[:in_context]]
 
     if 'similar' in ordering:
         descending = ordering.split("-")[1] == "descending"
         order_prompts(prompt_map, similarity_map, descending)
-        max_num_prompts = min(max_num_prompts, max([len(train_ids) for train_ids in prompt_map.values()]))
+
+    truncate(prompt_map, train_data, test_data, dataset)
+
+    max_num_prompts = min(max_num_prompts, max([len(prompts) for prompts in prompt_map.values()]))
+    in_context = min(in_context, max([len(train_ids) for prompts in prompt_map.values() for train_ids in prompts]))
 
     generation_dir = os.path.join(exp_dir, config.delim.join([str(x) for x in [gen_id,in_context,max_num_prompts,strategy,*ordering.split("-")]]))
     os.makedirs(generation_dir, exist_ok=True)

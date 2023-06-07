@@ -23,35 +23,25 @@ from utils import *
 from prompts import *
 import config
 
-def produce_mention_probs(predictions: dict, gold_label: str) -> dict:
-    '''
-    Counts the number of prompts in an ensemble that generates an answer span
-    '''
-    # all_counts = {"span": list(prompt_ids)}
-    all_counts = defaultdict(list)
-    for prompt_id, v in predictions.items():
-        all_counts[v['prediction']].append(prompt_id)
+'''
+    Preprocessing
+'''
+def check_missed(missed_predictions, example_predictions):
+        # Count & delete missed prompts
+        missed = 0
+        for prompt, pred in example_predictions.items():
+            if pred['prediction'] == "":
+                missed+=1
+                del example_predictions[prompt]
+        if missed > 0:
+            missed_predictions[example_id] = missed
 
-    # sort by number of prompts, descending
-    all_counts_lst = [(k, v) for k, v in all_counts.items()]
-    all_counts_lst = sorted(all_counts_lst, key=lambda x: len(x[1]), reverse=True)
+'''
+    Mixture Weights
+'''
 
-    # convert to dict
-    new_all_counts_lst = []
-    for (k, v) in all_counts_lst:
-        new_all_counts_lst.append(
-            {
-                "span": k,
-                "prompts": v,
-                "num_prompts": len(v),
-                "is_gold": k is gold_label,
-            }
-        )
-
-    return new_all_counts_lst
-
-def compute_prompt_probs_similar(
-    predictions: dict, prompt_map: list, similarity_lst: list
+def similarity_weights(
+    predictions: dict, prompt_map: list, similarity_lst: list, temperature
 ) -> dict:
     '''
     For an implied test example, calculates normalized similarity_score weighting for each prompt
@@ -59,13 +49,16 @@ def compute_prompt_probs_similar(
     # first convert similarity_lst to dict mapping id to score
     similarity_dict = dict(similarity_lst)
 
+
     all_prompt_scores = dict()
     for prompt_id in prompt_map:
-        assert(prompt_id) in predictions
+        key = "|".join([str(x) for x in prompt_id])
+        assert(key) in predictions
 
-        all_prompt_scores[prompt_id] = sum(
-           [similarity_dict[train_id] for train_id in prompt_id.split(delim)]
-        ) / len(prompt_ids.split(delim))
+        all_prompt_scores[key] = sum(
+           [similarity_dict[train_id] for train_id in prompt_id]
+        ) / len(prompt_id)
+
 
     # then get the list of prompt scores. Technically this step is unnecessary,
     # but put here for sanity check
@@ -83,47 +76,51 @@ def compute_prompt_probs_similar(
 
     return prompt_probs
 
-def compute_and_save_priors(
-    example_dir, example_predictions, prompt_map, similarity_lst
+def compute_and_save_weights(
+    example_dir, example_predictions, prompt_map, similarity_lst, temperature
 ):
     # check if file already exists
-    priors_filepath = os.path.join(example_dir, f"similar_priors_{temperature}.json")
-    if os.path.exists(priors_filepath):
-        priors = read_json(priors_filepath)
+    weights_filepath = os.path.join(example_dir, f"similarity_weights_{temperature}.json")
+    if os.path.exists(weights_filepath):
+        weights = read_json(weights_filepath)
     else:
-        priors = compute_prompt_probs_similar(
-            example_predictions, prompt_map, similarity_lst
+        weights = similarity_weights(
+            example_predictions, prompt_map, similarity_lst, temperature
         )
-        write_json(priors, priors_filepath)
+        write_json(weights, weights_filepath)
 
-    return priors
+    return weights
 
-def confidence(sampled_probs, prompt_probs, gold_label):
-    # Compute P(y|Z) from all the Indicator(m \in Z_i) and P(Z_i), for all i
-    # NOTE: This is the crux computation-- all others are flowery
-    all_probs = defaultdict(float)
-    for mention_d in sampled_probs:
-        all_probs[mention_d["span"]] = sum(
-            [prompt_probs[prompt] for prompt in mention_d["prompts"]]
-        )
+'''
+    Count-based (Sampling)
+'''
 
-    # convert to list and sorted
-    all_probs_lst = [(k, v) for k, v in all_probs.items()]
-    all_probs_lst = sorted(all_probs_lst, key=lambda x: x[1], reverse=True)
+def ensemble_counts(predictions: dict, gold_label: str) -> dict:
+    '''
+    Counts the number of prompts in an ensemble that generates an answer span
+    '''
+    # all_counts = {"span": list(prompt_ids)}
+    all_counts = defaultdict(list)
+    for prompt_id, v in predictions.items():
+        # TODO: list of answer spans
+        all_counts[v['prediction']].append(prompt_id)
+
+    # sort by number of prompts, descending
+    all_counts_lst = [(k, v) for k, v in all_counts.items()]
+    all_counts_lst = sorted(all_counts_lst, key=lambda x: len(x[1]), reverse=True)
 
     # convert to dict
-    new_all_probs_lst = []
-    for (k, v) in all_probs_lst:
-        new_all_probs_lst.append(
+    new_all_counts_lst = []
+    for (k, v) in all_counts_lst:
+        new_all_counts_lst.append(
             {
                 "span": k,
-                "prob": v,
+                "prompts": v,
+                "num_prompts": len(v),
                 "is_gold": k is gold_label,
             }
         )
-
-    return new_all_probs_lst
-
+    return new_all_counts_lst
 
 def sampling(sampled_probs, prompt_probs, gold_label):
     # Compute P(y|Z) from all the Indicator(m \in Z_i) and P(Z_i), for all i
@@ -151,13 +148,49 @@ def sampling(sampled_probs, prompt_probs, gold_label):
 
     return new_all_probs_lst
 
+def ensemble_probs(predictions: dict) -> dict:
+    '''
+    Maps dict {prompt_id: {label: probability}}
+    '''
+
+    all_probs = {prompt_id: v['probs'] for prompt_id, v in predictions.items()}
+
+    return all_probs
+
+def confidence(prompt_probs, model_probs, gold_label):
+    # Compute P(y|Z) from all the Indicator(m \in Z_i) and P(Z_i), for all i
+    # NOTE: This is the crux computation-- all others are flowery
+    all_probs = defaultdict(float)
+    for prompt_id, label_probs in model_probs.items():
+        for label, prob in label_probs.items():
+            if label not in all_probs:
+                all_probs[label] = 0
+                all_probs[label] += prompt_probs[prompt_id] * prob
+
+    # convert to list and sorted
+    all_probs_lst = [(k, v) for k, v in all_probs.items()]
+    all_probs_lst = sorted(all_probs_lst, key=lambda x: x[1], reverse=True)
+
+    # convert to dict
+    new_all_probs_lst = []
+    for (k, v) in all_probs_lst:
+        new_all_probs_lst.append(
+            {
+                "span": k,
+                "prob": v,
+                "is_gold": k is gold_label,
+            }
+        )
+
+    return new_all_probs_lst
+
 def main():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--dataset', choices=config.tasks)
     parser.add_argument('--experiment_id', type=int)
     parser.add_argument('--generation_id', type=int)
     parser.add_argument('--model', type=str.lower)
-    parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'majority-vote', 'confidence'], type=str)
+    parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'sampling', 'mice-confidence', 'confidence'], type=str)
     parser.add_argument('--temperature', default=1.0, type=float)
 #   parser.add_argument('--uuid', type=str)
 
@@ -182,65 +215,68 @@ def main():
     generation_dir = get_dir_with_id(exp_dir, gen_id)
 
     examples_dir = os.path.join(generation_dir, args.model)
-    similarity_map = read_json(os.path.join(generation_dir, "similarity_scores.json"))
+
+    if "mice" in method:
+        similarity_map = read_json(os.path.join(generation_dir, "similarity_scores.json"))
+
     prompt_map = read_json(os.path.join(generation_dir, "prompt_map.json"))
 
     # generate mention_counts
     predictions = dict()
     failed_predictions = []
-    missing_predictions = {}
+    missed_predictions = {}
     for example_id, example in test_data.items():
 
         example_dir = os.path.join(examples_dir, str(example_id))
         predictions_filepath = os.path.join(example_dir, "predictions.json")
 
-        # read in predictions
+        # Preprocessing
         if not os.path.exists(predictions_filepath):
             print("example_id=%s does not have predictions" % example_id)
             failed_predictions.append(example_id)
             continue
+
         example_predictions = read_json(predictions_filepath)
+        check_missed(missed_predictions, example_predictions)
 
-        # Count & delete missing prompts
-        missing = 0
-        for prompt, pred in example_predictions.items():
-            if pred['prediction'] == "":
-                missing+=1
-                del example_predictions[prompt]
-        if missing > 0:
-            missing_predictions[example_id] = missing
-
-        # produce raw mention probs (\mathbb{1}(m \in Y_{z,x}))
         gold_label = test_data[example_id]['label']
-        sampled_probs = produce_mention_probs(example_predictions, gold_label, dataset)
 
-        if args.method == "majority-vote":
-            predictions[example_id] = {
-                "input_text": format_example(example, dataset),
-                "prediction": sampled_probs[0]['span'] if len(sampled_probs) > 0 else "",
-                "num_prompts": sampled_probs[0]['num_prompts'] if len(sampled_probs) > 0 else "",
-                "label": gold_label,
-            }
-            continue
+        # Ensembling
+        pred = {}
+        if 'sampling' in method:
+            model_probs = ensemble_counts(example_predictions, gold_label)
+        else:
+            sampled_probs = ensemble_confidence(predictions, example_predictions, gold_label, dataset)
 
-        # outputs the counts and predictions
         write_json(  # \mathbb{1}(m \ in Y_{x,z})
-            sampled_probs,
-            os.path.join(example_dir, f"{args.method}_sampled_probs.json")
+                model_probs,
+                os.path.join(example_dir, f"{args.method}_counts.json")
         )
 
-        # compute P(Z_i|X) and save it
-        prompt_probs = compute_and_save_priors(
+        predictions[example_id] = {
+            "input_text": format_example(example, dataset),
+            "prediction": model_probs[0]['span'] if len(model_probs) > 0 else "",
+            "num_prompts": model_probs[0]['num_prompts'] if len(model_probs) > 0 else "",
+            "label": gold_label,
+        }
+
+
+        if 'mice' not in method:
+            continue
+
+        # Weighted Ensembling
+        prompt_probs = compute_and_save_weights(
             example_dir,
             example_predictions,
             prompt_map[str(example_id)],
             similarity_map[str(example_id)],
+            temperature
         )
 
-        # produce raw mention info
-        combined_probs = sampling(
-            sampled_probs, prompt_probs, gold_label
-        )
+        if 'sampling' in method:
+            combined_probs = sampling(model_probs, prompt_probs, gold_label)
+        else:
+            pred = ensemble_confidence(predictions, example_predictions, gold_label, dataset)
 
         predictions[example_id] = {
             "input_text": format_example(example, dataset),
@@ -250,16 +286,15 @@ def main():
 
         write_json(  # P(y_i|z,x)
             combined_probs,
-            os.path.join(example_dir, f"{args.method}_combined_probs.json")
+            os.path.join(example_dir, f"{args.method}_weighted.json")
         )
 
-#   print(args.method)
     print("predictions", [p['prediction'] for p in predictions.values()])
     print("references", [p['label'] for p in predictions.values()])
 
     for k, v in predictions.items():
-        if validate(v['prediction'], v['label'], dataset):
-            print(v['prediction'], "|",  v['label'])
+    #   if validate(v['prediction'], v['label'], dataset):
+        print(v['prediction'], "|",  v['label'])
 
     correct = 0
     total = 0
