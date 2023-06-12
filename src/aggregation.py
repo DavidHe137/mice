@@ -122,7 +122,7 @@ def ensemble_counts(predictions: dict, gold_label: str) -> dict:
         )
     return new_all_counts_lst
 
-def sampling(sampled_probs, prompt_probs, gold_label):
+def sampling(prompt_probs, sampled_probs, gold_label):
     # Compute P(y|Z) from all the Indicator(m \in Z_i) and P(Z_i), for all i
     # NOTE: This is the crux computation-- all others are flowery
     all_probs = defaultdict(float)
@@ -148,24 +148,53 @@ def sampling(sampled_probs, prompt_probs, gold_label):
 
     return new_all_probs_lst
 
-def ensemble_probs(predictions: dict) -> dict:
+def ensemble_confidence(predictions:dict, gold_label: str) -> dict:
     '''
     Maps dict {prompt_id: {label: probability}}
     '''
 
-    all_probs = {prompt_id: v['probs'] for prompt_id, v in predictions.items()}
+    token_probs = {prompt_id: v['probs'] for prompt_id, v in predictions.items()}
+    all_probs = {}
 
-    return all_probs
+    for probs in token_probs.values():
+        for label, prob in probs.items():
+            if label not in all_probs:
+                all_probs[label] = 0
+            all_probs[label] += prob
 
-def confidence(prompt_probs, model_probs, gold_label):
+    # convert to list and sorted
+    all_probs_lst = [(k, v) for k, v in all_probs.items()]
+    all_probs_lst = sorted(all_probs_lst, key=lambda x: x[1], reverse=True)
+
+    # convert to dict
+    new_all_probs_lst = []
+    for (k, v) in all_probs_lst:
+        new_all_probs_lst.append(
+            {
+                "span": k,
+                "prob": v,
+                "is_gold": k is gold_label,
+            }
+        )
+
+    return new_all_probs_lst, token_probs
+
+def dict_softmax(d:dict(), temperature: float):
+    mapping = [(k, v) for k, v in d.items()]
+    vals = torch.tensor([x[1] for x in mapping], dtype=torch.float32) / temperature
+    normalized = torch.log_softmax(vals, dim=-1)
+    mapping = {e[0]: normalized[i].item() for i, e in enumerate(mapping)}
+    return mapping
+
+def confidence(prompt_probs, token_probs, gold_label, temperature):
     # Compute P(y|Z) from all the Indicator(m \in Z_i) and P(Z_i), for all i
     # NOTE: This is the crux computation-- all others are flowery
     all_probs = defaultdict(float)
-    for prompt_id, label_probs in model_probs.items():
+    for prompt_id, label_probs in token_probs.items():
         for label, prob in label_probs.items():
             if label not in all_probs:
                 all_probs[label] = 0
-                all_probs[label] += prompt_probs[prompt_id] * prob
+            all_probs[label] += prompt_probs[prompt_id] * prob
 
     # convert to list and sorted
     all_probs_lst = [(k, v) for k, v in all_probs.items()]
@@ -245,21 +274,27 @@ def main():
         pred = {}
         if 'sampling' in method:
             model_probs = ensemble_counts(example_predictions, gold_label)
+            predictions[example_id] = {
+                "input_text": format_example(example, dataset),
+                "prediction": model_probs[0]['span'] if len(model_probs) > 0 else "",
+                "num_prompts": model_probs[0]['num_prompts'] if len(model_probs) > 0 else "",
+                "label": gold_label,
+            }
+
+
         else:
-            sampled_probs = ensemble_confidence(predictions, example_predictions, gold_label, dataset)
+            model_probs, token_probs = ensemble_confidence(example_predictions, gold_label)
+            predictions[example_id] = {
+                "input_text": format_example(example, dataset),
+                "prediction": model_probs[0]['span'] if len(model_probs) > 0 else "",
+                "num_prompts": model_probs[0]['prob'] if len(model_probs) > 0 else "",
+                "label": gold_label,
+            }
 
         write_json(  # \mathbb{1}(m \ in Y_{x,z})
                 model_probs,
                 os.path.join(example_dir, f"{args.method}_counts.json")
         )
-
-        predictions[example_id] = {
-            "input_text": format_example(example, dataset),
-            "prediction": model_probs[0]['span'] if len(model_probs) > 0 else "",
-            "num_prompts": model_probs[0]['num_prompts'] if len(model_probs) > 0 else "",
-            "label": gold_label,
-        }
-
 
         if 'mice' not in method:
             continue
@@ -274,9 +309,9 @@ def main():
         )
 
         if 'sampling' in method:
-            combined_probs = sampling(model_probs, prompt_probs, gold_label)
+            combined_probs = sampling(prompt_probs, model_probs, gold_label)
         else:
-            pred = ensemble_confidence(predictions, example_predictions, gold_label, dataset)
+            combined_probs = confidence(prompt_probs, token_probs, gold_label, temperature)
 
         predictions[example_id] = {
             "input_text": format_example(example, dataset),
@@ -286,15 +321,15 @@ def main():
 
         write_json(  # P(y_i|z,x)
             combined_probs,
-            os.path.join(example_dir, f"{args.method}_weighted.json")
+            os.path.join(example_dir, f"{args.method}|{temperature}|weighted.json")
         )
 
-    print("predictions", [p['prediction'] for p in predictions.values()])
-    print("references", [p['label'] for p in predictions.values()])
+#   print("predictions", [p['prediction'] for p in predictions.values()])
+#   print("references", [p['label'] for p in predictions.values()])
 
-    for k, v in predictions.items():
+#   for k, v in predictions.items():
     #   if validate(v['prediction'], v['label'], dataset):
-        print(v['prediction'], "|",  v['label'])
+#       print(v['prediction'], "|",  v['label'])
 
     correct = 0
     total = 0

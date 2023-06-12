@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+#SBATCH --job-name mice-inference-ids
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/inference/%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/inference/%A.err
+#SBATCH --partition=short
+#SBATCH --account=short
+#SBATCH --time 5
+
 import os
 import json
 import argparse

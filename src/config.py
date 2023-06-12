@@ -9,4 +9,4 @@ outputs = os.path.join(project_root, "outputs")
 llama = "/srv/nlprx-lab/share6/nghia6/llama"
 tests_per_gpu = 25
 delim = "|"
-tasks = ["BoolQ", "CB", "COPA", "MultiRC", "ReCoRD", "RTE", "WiC", "WSC", "Winograd"]
+tasks = ["BoolQ", "CB", "COPA", "MultiRC", "ReCoRD", "RTE", "WiC", "WSC", "Winograd", "GSM8K"]

@@ -100,12 +100,19 @@ def verbalize_COPA(results):
         choices[k] = max(v, key=v.get)
     return choices
 
+def format_GSM8K(ex:dict)->str:
+    return f"Q: {ex['question']}\n\nA:"
+
+def format_GSM8K_in_context(ex:dict)->str:
+    prompt = format_GSM8K(ex)
+    prompt = " ".join([prompt, ex['answer']])
+    prompt = re.sub("(<<).*?(>>)", "", prompt)
+    prompt = re.sub("\\n(#+).*", f" The answer is {ex['label']:,}.", prompt)
+
+    return prompt
+
 def format_general_few_shot(demonstrations, test, dataset):
     context = [ex['in_context'] for ex in demonstrations]
-
-    instructions = {"Winograd": "Final Exam with Answer Key\nInstructions: Please carefully read the following passages. For each passage, you must identify which noun the pronoun marked in *bold* refers to.\n====="}
-    if dataset in instructions:
-        context = [instructions[dataset], *context]
 
     prompt = format_example(test, dataset)
     prompt = "\n\n".join([*context, prompt])
@@ -120,7 +127,9 @@ def format_example(ex : dict, dataset: str):
                 "RTE": format_RTE,
                 "WiC": format_WiC,
                 "WSC": format_WSC,
-                "Winograd": format_Winograd}
+                "Winograd": format_Winograd,
+                "GSM8K": format_GSM8K
+                 }
 
     return templates[dataset](ex)
 
@@ -133,7 +142,9 @@ def format_in_context(ex : dict, dataset: str)->str:
                 "RTE": format_RTE_in_context,
                 "WiC": format_WiC_in_context,
                 "WSC": format_WSC_in_context,
-                "Winograd": format_Winograd_in_context}
+                "Winograd": format_Winograd_in_context,
+                "GSM8K": format_GSM8K_in_context,
+                 }
 
     return templates[dataset](ex)
 
@@ -146,7 +157,9 @@ def format_few_shot(demonstrations, test, dataset):
                 "RTE": format_general_few_shot,
                 "WiC": format_general_few_shot,
                 "WSC": format_general_few_shot,
-                "Winograd": format_general_few_shot}
+                "Winograd": format_general_few_shot,
+                "GSM8K": format_general_few_shot
+                 }
 
     if dataset in ["COPA"]:
         return templates[dataset](demonstrations, test)
@@ -190,6 +203,20 @@ def verbalize_Winograd(text):
     first_sentence = text.split("\n")[0].lower().rstrip('.')
     return re.sub("(.+) refers to ", "", first_sentence).strip()
 
+def verbalize_GSM8K(output):
+    answer = output.lower()
+    answer = re.split("the answer is", answer)
+    if len(answer) > 1:
+        answer = answer[1]
+    else:
+        return ""
+    answer = re.findall("\d+", answer)
+
+    if len(answer) > 0:
+        return int(answer[0].replace(',', ''))
+    else:
+        return ""
+
 def verbalize(text : dict, dataset: str):
     assert dataset in config.tasks
 
@@ -199,14 +226,15 @@ def verbalize(text : dict, dataset: str):
                 "RTE": verbalize_RTE,
                 "WiC": verbalize_TrueFalse,
                 "WSC": verbalize_TrueFalse,
-                "Winograd": verbalize_Winograd}
+                "Winograd": verbalize_Winograd,
+                "GSM8K": verbalize_GSM8K}
 
     return templates[dataset](text)
 
 def validate(pred, label, dataset):
     assert dataset in config.tasks
 
-    equality = lambda pred, label: pred == label
+    equality = lambda pred, label: pred == label or str(pred).lower() == str(label).lower()
     winograd = lambda pred, label: label.lower() in pred or label.lower() in pred or common_words(pred, label.lower()) >= len(label.split(" ")) / 2
 #   winograd = lambda pred, label: pred.lower() == label.lower()
     templates = {"BoolQ": equality,
@@ -215,7 +243,8 @@ def validate(pred, label, dataset):
             "RTE": equality,
             "WiC": equality,
             "WSC": equality,
-            "Winograd": winograd}
+            "Winograd": winograd,
+            "GSM8K": equality}
 
     return templates[dataset](pred, label)
 

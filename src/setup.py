@@ -69,9 +69,9 @@ def main():
 
     summary = {
         'created': str(datetime.now()),
-        'dataset': args.dataset,
-        'train': args.train,
-        'test': args.test,
+        'dataset': dataset,
+        'train': train,
+        'test': test,
         'train_ids': [example['idx'] for example in train_data],
         'test_ids': [example['idx'] for example in test_data]
     }
@@ -88,6 +88,9 @@ def main():
         log.experiment_id = str(exp_id)
         log.status = 'prompt_generation'
         write_json(log, os.path.join(config.logs, f"{args.uuid}.json"))
+
+    print("Experiment ID:", exp_id)
+    print("Test Examples:", len(test_data))
 
 if __name__ == '__main__':
     main()

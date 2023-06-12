@@ -119,13 +119,14 @@ def main():
     train_data = read_jsonl(os.path.join(exp_dir, 'train.jsonl'))
     test_data = read_jsonl(os.path.join(exp_dir, 'test.jsonl'))
 
-    in_context = max(in_context, len(train_data))
+    in_context = min(in_context, len(train_data))
 
     prompt_map = {}
     similarity_map = similarity_scores(train_data, test_data, dataset, "all-roberta-large-v1")
     demonstration_ids = [ex["idx"] for ex in train_data]
 
     if max_num_prompts > 1:
+        #TODO: just sample until you have enough prompts
         id_combinations = list([list(x) for x in combinations(demonstration_ids, in_context)])
 
         if strategy == "random":
@@ -166,6 +167,10 @@ def main():
     print("Writing prompt map...", end="")
     write_json(prompt_map, os.path.join(generation_dir, 'prompt_map.json'))
     print("done!")
+
+    print("Generation ID:", gen_id)
+    print("In Context:", in_context)
+    print("Max Num Prompts:", max_num_prompts)
 
     # log if running with uuid
     if args.uuid:

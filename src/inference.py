@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 #SBATCH --job-name mice-inference
-#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/inference/%a.out
-#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/inference/%a.err
+#SBATCH --output=/srv/nlprx-lab/share6/dhe83/mice/logs/inference/%A.out
+#SBATCH --error=/srv/nlprx-lab/share6/dhe83/mice/logs/inference/%A.err
 #SBATCH --gres=gpu:1
 #SBATCH --constraint=a40
 #SBATCH --cpus-per-task 6
 #SBATCH --partition=overcap
 #SBATCH --account=overcap
-#SBATCH --time 15
+#SBATCH --time 06:00:00
 #SBATCH --requeue
 
 import os
@@ -15,138 +15,84 @@ import sys
 import json
 import argparse
 from peft import PeftModel
-from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer, LlamaForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer, LlamaForCausalLM, GenerationConfig
 from tqdm import tqdm
-from math import ceil
+from math import ceil, floor, log
 
 sys.path.append("/coc/pskynet6/dhe83/mice/src")
 from utils import *
 from prompts import *
-
-# llama imports
-from pathlib import Path
-from typing import Tuple
-import sys
-import torch
 import time
-# from fairscale.nn.model_parallel.initialize import initialize_model_parallel
 
-#sys.path.append(config.llama)
-# from llama import ModelArgs, Transformer, Tokenizer, LLaMA
+greedy = GenerationConfig(
+    max_new_tokens=5,
+    temperature=0,
+    return_dict_in_generate=True,
+    output_scores=True,
+)
 
-def setup_model_parallel() -> Tuple[int, int]:
-    local_rank = int(os.environ.get("LOCAL_RANK", -1))
-    world_size = int(os.environ.get("WORLD_SIZE", -1))
+sampling = GenerationConfig(
+    max_new_tokens=200,
+    temperature=0.5,
+    do_sample=True,
+    top_k=40,
+    return_dict_in_generate=True,
+    output_scores=True,
+)
 
-    torch.distributed.init_process_group("nccl")
-    initialize_model_parallel(world_size)
-    torch.cuda.set_device(local_rank)
+available_bytes = torch.cuda.mem_get_info()[0]
+# TODO: dynamic batch size
+def maximum_batch_size(available_bytes, max_tokens):
+    per_token = 2 * 2**20
+    batch_size =  available_bytes // (per_token * max_tokens)
+    batch_size = 2**(floor(log(batch_size, 2)))
+    return batch_size
 
-    # seed must be the same in all processes
-    torch.manual_seed(1)
-    return local_rank, world_size
+def max_token_len(tokenizer, prompts, gen_len=0):
+    return max([len(tokenizer(p).input_ids) for p in prompts]) + gen_len
 
-#   def load_llama(
-#       ckpt_dir: str,
-#       local_rank: int,
-#       world_size: int,
-#       max_seq_len: int,
-#       max_batch_size: int
-#   ) -> LLaMA:
-#       tokenizer_path = os.path.join(config.llama, "checkpoints",  "tokenizer.model")
+def generate_single(model, tokens, attention_mask):
+    outputs = model.generate(
+        input_ids=tokens.input_ids,
+        attention_mask=attention_mask,
+        generation_config=gen_config
+        )
+    return outputs
 
-#       start_time = time.time()
-#       checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
-#       assert world_size == len(
-#           checkpoints
-#       ), f"Loading a checkpoint for MP={len(checkpoints)} but world size is {world_size}"
-#       ckpt_path = checkpoints[local_rank]
-#       print("Loading")
-#       checkpoint = torch.load(ckpt_path, map_location="cpu")
-#       with open(Path(ckpt_dir) / "params.json", "r") as f:
-#           params = json.loads(f.read())
-
-#       model_args: ModelArgs = ModelArgs(
-#           max_seq_len=max_seq_len, max_batch_size=max_batch_size, **params
-#       )
-#       tokenizer = Tokenizer(model_path=tokenizer_path)
-#       model_args.vocab_size = tokenizer.n_words
-#       torch.set_default_tensor_type(torch.cuda.HalfTensor)
-#       model = Transformer(model_args)
-#       torch.set_default_tensor_type(torch.FloatTensor)
-#       model.load_state_dict(checkpoint, strict=False)
-
-#       generator = LLaMA(model, tokenizer)
-#       print(f"Loaded in {time.time() - start_time:.2f} seconds")
-#       return generator
-
-def predict_batch(
-    tokenizer,
-    model,
-    test_example:dict,
-    prompts,
-    train_data,
-    dataset:str,
-    max_generated_len:int,
-    batch_size: int,
-):
-    train_ids = [tuple(ids) for ids in prompts]
-    output_text = []
-
-    input_text = [format_prompt(test_example,
-                                [train_data[train_id] for train_id in prompt],
-                                dataset) for prompt in prompts]
-    batch_tokens = tokenizer(input_text, padding=True, return_tensors="pt").to('cuda:0')
-
-    num_batches = round(batch_tokens['input_ids'].shape[0] / batch_size + 0.5)
-    for batch in batch_tokens['input_ids'].chunk(num_batches):
+def self_consistency(model, tokens, attention_mask, num_paths):
+    for _ in num_paths:
         outputs = model.generate(
-            batch,
-            max_new_tokens=max_generated_len,
-            temperature=0,
-            return_dict_in_generate=True,
-            output_scores=True,
-            eos_token_id=198,  # special character 'ċ' (bytecode for new line?) NOTE use this for generation
+            input_ids=tokens.input_ids,
+            attention_mask=attention_mask,
+            generation_config=gen_config
         )
 
-        output_text.extend(tokenizer.batch_decode(outputs.sequences[:, -max_generated_len:]))
-
-
-    predictions = {}
-    for i, train_ids in enumerate(train_ids):
-        predictions[str(tuple(train_ids))] = {
-                "input_text": input_text[i],
-                "output_text": output_text[i],
-                "prediction": extract_prediction(output_text[i], dataset),
-                "label": test_example["label"]
-            }
-
-    return predictions
-
-def batch_inference(model, tokenizer, prompts, batch_size, mask_bos):
+def batch_inference(model, tokenizer, prompts, gen_config, mask_bos, self_consistency):
     output_tokens = torch.empty(0, dtype=torch.int64).to('cuda:0')
     first_token_scores = torch.empty(0, dtype=torch.float16).to('cuda:0')
 
+    gen_len = gen_config.max_new_tokens
+    batch_size = maximum_batch_size(available_bytes, max_token_len(tokenizer, prompts, gen_len))
     num_batches = ceil(len(prompts) / batch_size)
 
     for batch in range(num_batches):
         start = batch * batch_size
         end = min((batch + 1) * batch_size, len(prompts))
 
-        gen_len=5
         # tokenize by batch to mitigate effect of long outliers
         tokens = tokenizer(prompts[start:end], padding=True, return_tensors="pt").to('cuda:0')
         attention_mask = masked_bos(tokens.attention_mask) if mask_bos else tokens.attention_mask
 
+        #TODO: generation config
         with torch.no_grad():
-            outputs = model.generate(
-                input_ids=tokens.input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=gen_len,
-                temperature=0,
-                return_dict_in_generate=True,
-                output_scores=True,
-            )
+            if self_consistency:
+
+            else:
+                outputs = model.generate(
+                    input_ids=tokens.input_ids,
+                    attention_mask=attention_mask,
+                    generation_config=gen_config
+                )
         output_tokens = torch.cat((output_tokens, outputs.sequences[:, -gen_len:]))
         first_token_scores = torch.cat((first_token_scores, outputs.scores[0]))
 
@@ -191,10 +137,9 @@ def main():
     parser.add_argument('--model', type=str.lower)
     parser.add_argument('--test-ids', type=int, nargs='+')
     parser.add_argument('-mask-bos', action='store_true')
+    parser.add_argument('-self-consistency', action='store_true')
     parser.add_argument('-f', action='store_true')
-
 #   parser.add_argument('--uuid', type=str)
-#SLURM_ARRAY_TASK_ID = os.getenv('SLURM_ARRAY_TASK_ID')
 
 
     args = parser.parse_args()
@@ -206,11 +151,6 @@ def main():
 #       log = get_log_with_uuid(args.uuid)
 #       experiment_id = log['experiment_id']
 #       generation_id = log['generation_id']
-
-#   test_ids = [exp_info['test_ids'][i] for i in
-#                   range(int(SLURM_ARRAY_TASK_ID),
-#                       min(int(SLURM_ARRAY_TASK_ID) + config.tests_per_gpu,
-#                       len(exp_info['test_ids'])))]
 
     exp_dir = get_dir_with_id(os.path.join(config.experiments, dataset), exp_id)
     train_data = read_jsonl(os.path.join(exp_dir, 'train.jsonl'))
@@ -227,6 +167,7 @@ def main():
               "opt-2.7b": "facebook/opt-2.7B",
               "opt-6.7b": "facebook/opt-6.7B",
               "llama-7b": "decapoda-research/llama-7b-hf",
+              "llama-13b": "decapoda-research/llama-13b-hf",
               "alpaca-7b": "decapoda-research/llama-7b-hf"}
 
     lora_weights = {"alpaca-7b": "tloen/alpaca-lora-7b"}
@@ -241,6 +182,7 @@ def main():
               "opt-2.7b": 8,
               "opt-6.7b": 4,
               "llama-7b": 4,
+              "llama-13b": 2,
               "alpaca-7b": 4}
     batch_size = batch_sizes[args.model]
 
@@ -267,6 +209,7 @@ def main():
 
         model.half()
         model.eval()
+
         if torch.__version__ >= "2" and sys.platform != "win32":
             model = torch.compile(model)
     else:
@@ -287,7 +230,7 @@ def main():
         prompt_map = json.load(f)
     print("done!")
 
-
+    start = time.time()
     missed = []
     # make predictions
     for test_id, example in tqdm(test_examples.items()):
@@ -300,7 +243,7 @@ def main():
             print(f"Example {test_id} already has predictions")
             continue
 
-        if dataset in ["BoolQ", "CB", "RTE", "WiC", "WSC", "Winograd"]:
+        if dataset in ["BoolQ", "CB", "RTE", "WiC", "WSC", "Winograd", "GSM8K"]:
             prompts = []
             for train_ids in prompt_map[test_id]:
                 key = config.delim.join([str(x) for x in train_ids])
@@ -311,13 +254,20 @@ def main():
                 predictions[key]['prompt'] = prompt
                 prompts.append(prompt)
 
-            output_sequences, output_scores = batch_inference(model, tokenizer, prompts, batch_size, args.mask_bos)
+            gen_config = greedy
+            if dataset == "GSM8K":
+                gen_config = sampling
+
+            output_sequences, output_scores = batch_inference(model, tokenizer, prompts, gen_config, args.mask_bos, args.self_consistency)
             output_text = tokenizer.batch_decode(output_sequences)
 
             for i, train_ids in enumerate(prompt_map[test_id]):
                 key = config.delim.join([str(x) for x in train_ids])
                 predictions[key]['output_text'] = output_text[i]
-                predictions[key]['probs'] = first_token_probs(output_scores[i], dataset)
+
+                if dataset in ["BoolQ", "WSC", "WIC"]:
+                    predictions[key]['probs'] = first_token_probs(output_scores[i], dataset)
+
                 predictions[key]['prediction'] = verbalize(output_text[i], dataset)
 
         else:
@@ -360,5 +310,8 @@ def main():
     if len(missed) > 0:
         print("Missed:", ", ".join([str(x) for x in missed]))
 
+    end = time.time()
+    print("Time elapsed:", end-start)
+    print("Time/example:", (end-start)/float(len(test_examples)))
 if __name__ == "__main__":
     main()
