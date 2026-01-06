@@ -94,10 +94,10 @@ def truncate(prompt_map: dict(list(list())), train_data: list(dict()), test_data
 def main():
     parser = argparse.ArgumentParser(description='Generate json dictionary consisting of test_idx: train_indices)')
     parser.add_argument('--dataset', choices=config.tasks)
-    parser.add_argument('--experiment_id', type=int)
+    parser.add_argument('--experiment-id', type=int)
 
-    parser.add_argument('--in_context', default=2, type=int)
-    parser.add_argument('--max_num_prompts', default=1, type=int)
+    parser.add_argument('--in-context', default=2, type=int)
+    parser.add_argument('--max-num-prompts', default=1, type=int)
     parser.add_argument('--strategy', choices=['random', 'similar'], default='random', type=str)
     parser.add_argument('--ordering', choices=['random', 'similar-ascending', 'similar-descending'], default='random', type=str)
 

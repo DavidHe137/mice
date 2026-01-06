@@ -28,13 +28,15 @@ import config
 '''
 def check_missed(missed_predictions, example_predictions):
         # Count & delete missed prompts
-        missed = 0
+        missed = []
         for prompt, pred in example_predictions.items():
             if pred['prediction'] == "":
-                missed+=1
+                missed.append(prompt)
+
+        for prompt in missed:
                 del example_predictions[prompt]
-        if missed > 0:
-            missed_predictions[example_id] = missed
+
+        return missed
 
 '''
     Mixture Weights
@@ -53,7 +55,6 @@ def similarity_weights(
     all_prompt_scores = dict()
     for prompt_id in prompt_map:
         key = "|".join([str(x) for x in prompt_id])
-        assert(key) in predictions
 
         all_prompt_scores[key] = sum(
            [similarity_dict[train_id] for train_id in prompt_id]
@@ -216,8 +217,8 @@ def confidence(prompt_probs, token_probs, gold_label, temperature):
 def main():
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--dataset', choices=config.tasks)
-    parser.add_argument('--experiment_id', type=int)
-    parser.add_argument('--generation_id', type=int)
+    parser.add_argument('--experiment-id', type=int)
+    parser.add_argument('--generation-id', type=int)
     parser.add_argument('--model', type=str.lower)
     parser.add_argument('--method', default="mice-sampling", choices=['mice-sampling', 'sampling', 'mice-confidence', 'confidence'], type=str)
     parser.add_argument('--temperature', default=1.0, type=float)
@@ -266,7 +267,10 @@ def main():
             continue
 
         example_predictions = read_json(predictions_filepath)
-        check_missed(missed_predictions, example_predictions)
+        missed = check_missed(missed_predictions, example_predictions)
+
+        if missed:
+            missed_predictions[example_id] = missed
 
         gold_label = test_data[example_id]['label']
 

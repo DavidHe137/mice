@@ -7,8 +7,9 @@
 #SBATCH --cpus-per-task 6
 #SBATCH --partition=overcap
 #SBATCH --account=overcap
-#SBATCH --time 06:00:00
 #SBATCH --requeue
+
+#NOTE: add time constraint
 
 import os
 import sys
@@ -18,6 +19,7 @@ from peft import PeftModel
 from transformers import AutoTokenizer, AutoModelForCausalLM, LlamaTokenizer, LlamaForCausalLM, GenerationConfig
 from tqdm import tqdm
 from math import ceil, floor, log
+from collections import Counter
 
 sys.path.append("/coc/pskynet6/dhe83/mice/src")
 from utils import *
@@ -51,31 +53,16 @@ def maximum_batch_size(available_bytes, max_tokens):
 def max_token_len(tokenizer, prompts, gen_len=0):
     return max([len(tokenizer(p).input_ids) for p in prompts]) + gen_len
 
-def generate_single(model, tokens, attention_mask):
-    outputs = model.generate(
-        input_ids=tokens.input_ids,
-        attention_mask=attention_mask,
-        generation_config=gen_config
-        )
-    return outputs
-
-def self_consistency(model, tokens, attention_mask, num_paths):
-    for _ in num_paths:
-        outputs = model.generate(
-            input_ids=tokens.input_ids,
-            attention_mask=attention_mask,
-            generation_config=gen_config
-        )
-
-def batch_inference(model, tokenizer, prompts, gen_config, mask_bos, self_consistency):
+def batch_inference(model, tokenizer, prompts, gen_config, mask_bos):
     output_tokens = torch.empty(0, dtype=torch.int64).to('cuda:0')
     first_token_scores = torch.empty(0, dtype=torch.float16).to('cuda:0')
 
     gen_len = gen_config.max_new_tokens
-    batch_size = maximum_batch_size(available_bytes, max_token_len(tokenizer, prompts, gen_len))
+#   batch_size = maximum_batch_size(available_bytes, max_token_len(tokenizer, prompts, gen_len))
+    batch_size = 8
     num_batches = ceil(len(prompts) / batch_size)
 
-    for batch in range(num_batches):
+    for batch in tqdm(range(num_batches), desc="Prompt Batch", leave=False):
         start = batch * batch_size
         end = min((batch + 1) * batch_size, len(prompts))
 
@@ -85,14 +72,11 @@ def batch_inference(model, tokenizer, prompts, gen_config, mask_bos, self_consis
 
         #TODO: generation config
         with torch.no_grad():
-            if self_consistency:
-
-            else:
-                outputs = model.generate(
-                    input_ids=tokens.input_ids,
-                    attention_mask=attention_mask,
-                    generation_config=gen_config
-                )
+            outputs = model.generate(
+                input_ids=tokens.input_ids,
+                attention_mask=attention_mask,
+                generation_config=gen_config
+            )
         output_tokens = torch.cat((output_tokens, outputs.sequences[:, -gen_len:]))
         first_token_scores = torch.cat((first_token_scores, outputs.scores[0]))
 
@@ -129,15 +113,19 @@ def masked_bos(a: torch.Tensor)->torch.Tensor:
     a[:, -1] = 0
     return torch.roll(a, shifts=1, dims=-1)
 
+def most_common(l: list()):
+    data = Counter(lst)
+    return data.most_common(1)[0][0]
+
 def main():
     parser = argparse.ArgumentParser(description='')
-    parser.add_argument('--experiment_id', type=int)
+    parser.add_argument('--experiment-id', type=int)
     parser.add_argument('--dataset', choices=config.tasks)
-    parser.add_argument('--generation_id', type=int)
+    parser.add_argument('--generation-id', type=int)
     parser.add_argument('--model', type=str.lower)
     parser.add_argument('--test-ids', type=int, nargs='+')
+    parser.add_argument('--num_paths', type=int, default=1)
     parser.add_argument('-mask-bos', action='store_true')
-    parser.add_argument('-self-consistency', action='store_true')
     parser.add_argument('-f', action='store_true')
 #   parser.add_argument('--uuid', type=str)
 
@@ -221,6 +209,8 @@ def main():
     model_dir = os.path.join(generation_dir, model_name)
     if args.mask_bos:
         model_dir = os.path.join(generation_dir, f"{model_name}_masked_bos")
+    if args.num_paths > 1:
+        model_dir = model_dir + f"_{args.num_paths}"
     os.makedirs(model_dir, exist_ok=True)
 
 
@@ -233,7 +223,7 @@ def main():
     start = time.time()
     missed = []
     # make predictions
-    for test_id, example in tqdm(test_examples.items()):
+    for test_id, example in tqdm(test_examples.items(), desc="Test Examples", position=0):
 #       try:
         predictions_folder= os.path.join(model_dir, test_id)
         predictions_filepath = os.path.join(predictions_folder, "predictions.json")
@@ -258,17 +248,35 @@ def main():
             if dataset == "GSM8K":
                 gen_config = sampling
 
-            output_sequences, output_scores = batch_inference(model, tokenizer, prompts, gen_config, args.mask_bos, args.self_consistency)
-            output_text = tokenizer.batch_decode(output_sequences)
+            # TODO: big optimizations here
+            if args.num_paths > 1:
+                output_paths = {config.delim.join([str(x) for x in train_ids]): [] for train_ids in prompt_map[test_id]}
+
+                for _ in tqdm(range(args.num_paths), desc="Self-Consistency", leave=False):
+                    output_sequences, output_scores = batch_inference(model, tokenizer, prompts, gen_config, args.mask_bos)
+                    output_text = tokenizer.batch_decode(output_sequences)
+
+                    for i, train_ids in enumerate(prompt_map[test_id]):
+                        key = config.delim.join([str(x) for x in train_ids])
+                        output_paths[key].append(output_text[i])
+
+            else:
+                output_sequences, output_scores = batch_inference(model, tokenizer, prompts, gen_config, args.mask_bos)
+                output_text = tokenizer.batch_decode(output_sequences)
 
             for i, train_ids in enumerate(prompt_map[test_id]):
                 key = config.delim.join([str(x) for x in train_ids])
-                predictions[key]['output_text'] = output_text[i]
+
+                if args.num_paths > 1:
+                    predictions[key]['paths'] = output_text[i]
+                    predictions[key]['prediction'] = most_common([verbalize(ans, dataset) for ans in output_text[i]])
+                else:
+                    predictions[key]['output_text'] = output_text[i]
+                    predictions[key]['prediction'] = verbalize(output_text[i], dataset)
 
                 if dataset in ["BoolQ", "WSC", "WIC"]:
                     predictions[key]['probs'] = first_token_probs(output_scores[i], dataset)
 
-                predictions[key]['prediction'] = verbalize(output_text[i], dataset)
 
         else:
             p_map = {}
